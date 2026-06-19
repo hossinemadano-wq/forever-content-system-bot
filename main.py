@@ -5,6 +5,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 
+from database import supabase
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -15,7 +17,13 @@ dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
-    await message.answer("سلام 👋\nربات آموزشی فوراور آماده شروع است.")
+    supabase.table("products").select("id").limit(1).execute()
+
+    await message.answer(
+        "سلام 👋\n"
+        "ربات آموزشی فوراور آماده است.\n"
+        "اتصال به دیتابیس هم برقرار شد ✅"
+    )
 
 
 async def main():
