@@ -36,6 +36,7 @@ WAITING_EDIT_INPUT = {}
 WAITING_FAQ_CODE = {}
 WAITING_FAQ_INPUT = {}
 WAITING_OBJECTION_INPUT = {}
+WAITING_TRAINING_EDIT_INPUT = {}
 
 
 def register_user(message: Message):
@@ -111,6 +112,7 @@ def clear_waiting_states(telegram_id: int):
     WAITING_FAQ_CODE.pop(telegram_id, None)
     WAITING_FAQ_INPUT.pop(telegram_id, None)
     WAITING_OBJECTION_INPUT.pop(telegram_id, None)
+    WAITING_TRAINING_EDIT_INPUT.pop(telegram_id, None)
 
 
 def get_menu(role: str):
@@ -167,6 +169,7 @@ def get_objections_menu():
 
 def get_trainings_menu():
     buttons = [
+        [KeyboardButton(text="✏️ ویرایش محتوای آموزش")],
         [KeyboardButton(text="🎓 آموزش‌ها")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ]
@@ -355,6 +358,41 @@ def get_training_step_detail_keyboard(level_number, step_number, title):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_edit_training_levels_keyboard(levels):
+    buttons = []
+
+    for item in levels:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"سطح {item.get('level_number')}: {item.get('title')}",
+                callback_data=f"edit_training_level:{item.get('level_number')}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_edit_training_steps_keyboard(level_number, steps):
+    buttons = []
+
+    for step in steps:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"مرحله {step.get('step_number')}: {step.get('title')}",
+                callback_data=f"edit_training_step:{level_number}:{step.get('step_number')}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 بازگشت به سطح‌ها",
+            callback_data="edit_training_levels"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_products_keyboard(products):
     buttons = []
 
@@ -510,6 +548,114 @@ async def send_training_step_detail(target, level_number: int, step_number: int)
             item.get("title")
         )
     )
+
+
+async def send_edit_training_levels(target):
+    levels = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("is_active", True)
+        .order("level_number")
+        .execute()
+    )
+
+    if not levels.data:
+        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
+        return
+
+    text = "✏️ ویرایش محتوای آموزش\n\n"
+    text += "اول سطح آموزشی را انتخاب کن:"
+
+    await target.answer(
+        text,
+        reply_markup=get_edit_training_levels_keyboard(levels.data)
+    )
+
+
+async def send_edit_training_level_steps(target, level_number: int):
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    level_item = level.data[0]
+
+    steps = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level_item.get("id"))
+        .eq("is_active", True)
+        .order("step_number")
+        .execute()
+    )
+
+    if not steps.data:
+        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
+        return
+
+    text = f"✏️ ویرایش سطح {level_item.get('level_number')}: {level_item.get('title')}\n\n"
+    text += "حالا مرحله‌ای که می‌خواهی ویرایش کنی را انتخاب کن:"
+
+    await target.answer(
+        text,
+        reply_markup=get_edit_training_steps_keyboard(level_number, steps.data)
+    )
+
+
+async def prepare_edit_training_step(target, telegram_id: int, level_number: int, step_number: int):
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    step = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level.data[0].get("id"))
+        .eq("step_number", step_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not step.data:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    item = step.data[0]
+
+    WAITING_TRAINING_EDIT_INPUT[telegram_id] = {
+        "step_id": item.get("id"),
+        "level_number": level_number,
+        "step_number": step_number,
+        "title": item.get("title")
+    }
+
+    text = "✅ مرحله انتخاب شد.\n\n"
+    text += f"سطح {level_number} - مرحله {step_number}\n"
+    text += f"{item.get('title')}\n\n"
+    text += "محتوای فعلی:\n"
+    text += f"{item.get('content') or 'محتوایی ثبت نشده است.'}\n\n"
+    text += "متن جدید آموزش را همینجا بفرست.\n"
+    text += "هر متنی بفرستی جایگزین محتوای فعلی می‌شود."
+
+    await target.answer(text)
 
 
 async def send_products_list(target):
@@ -792,6 +938,70 @@ async def manage_trainings_handler(message: Message):
     await message.answer(
         "🎓 مدیریت آموزش‌ها",
         reply_markup=get_trainings_menu()
+    )
+
+
+@dp.message(F.text == "✏️ ویرایش محتوای آموزش")
+async def edit_training_content_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    await send_edit_training_levels(message)
+
+
+@dp.callback_query(F.data == "edit_training_levels")
+async def edit_training_levels_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_edit_training_levels(callback.message)
+
+
+@dp.callback_query(F.data.startswith("edit_training_level:"))
+async def edit_training_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+
+    level_text = callback.data.split(":")[1]
+
+    if not level_text.isdigit():
+        await callback.answer("شماره سطح درست نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_edit_training_level_steps(callback.message, int(level_text))
+
+
+@dp.callback_query(F.data.startswith("edit_training_step:"))
+async def edit_training_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+
+    if len(parts) != 3:
+        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
+        return
+
+    level_text = parts[1]
+    step_text = parts[2]
+
+    if not level_text.isdigit() or not step_text.isdigit():
+        await callback.answer("شماره سطح و مرحله درست نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await prepare_edit_training_step(
+        callback.message,
+        callback.from_user.id,
+        int(level_text),
+        int(step_text)
     )
 
 
@@ -1087,6 +1297,32 @@ async def product_catalog_file_handler(message: Message):
 
 @dp.message()
 async def text_handler(message: Message):
+    if WAITING_TRAINING_EDIT_INPUT.get(message.from_user.id):
+        edit_data = WAITING_TRAINING_EDIT_INPUT.get(message.from_user.id)
+        new_content = message.text.strip()
+
+        if not new_content:
+            await message.answer("❌ متن آموزش نمی‌تواند خالی باشد.")
+            return
+
+        try:
+            supabase.table("training_steps").update({
+                "content": new_content
+            }).eq("id", edit_data["step_id"]).execute()
+
+            clear_waiting_states(message.from_user.id)
+
+            await message.answer(
+                "✅ محتوای آموزش با موفقیت ویرایش شد.\n\n"
+                f"سطح {edit_data['level_number']} - مرحله {edit_data['step_number']}\n"
+                f"{edit_data['title']}"
+            )
+
+        except Exception:
+            await message.answer("❌ خطا در ویرایش محتوای آموزش.")
+
+        return
+
     if WAITING_OBJECTION_INPUT.get(message.from_user.id):
         objection_data = parse_objection_text(message.text)
 
