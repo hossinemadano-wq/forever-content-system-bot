@@ -3,7 +3,14 @@ import os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
 from aiogram.filters import CommandStart
 
 from database import supabase
@@ -278,6 +285,346 @@ def product_template(product):
     )
 
 
+def get_training_levels_keyboard(levels):
+    buttons = []
+
+    for item in levels:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"سطح {item.get('level_number')}: {item.get('title')}",
+                callback_data=f"training_level:{item.get('level_number')}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_training_steps_keyboard(level_number, steps):
+    buttons = []
+
+    for step in steps:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"مرحله {step.get('step_number')}: {step.get('title')}",
+                callback_data=f"training_step:{level_number}:{step.get('step_number')}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 بازگشت به سطح‌ها",
+            callback_data="training_levels"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_training_step_detail_keyboard(level_number, step_number, title):
+    buttons = []
+
+    if title == "پاسخ به ابجکشن‌ها":
+        buttons.append([
+            InlineKeyboardButton(
+                text="🛡 دیدن پاسخ به ابجکشن‌ها",
+                callback_data="show_objections"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="📝 شروع آزمون",
+            callback_data=f"training_quiz:{level_number}:{step_number}"
+        )
+    ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 بازگشت به مرحله‌ها",
+            callback_data=f"training_level:{level_number}"
+        )
+    ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="🏠 بازگشت به سطح‌ها",
+            callback_data="training_levels"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_products_keyboard(products):
+    buttons = []
+
+    for item in products:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{item.get('code')} - {item.get('fa_name')}",
+                callback_data=f"product:{item.get('code')}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_product_detail_keyboard():
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="🔙 بازگشت به محصولات",
+                callback_data="products_list"
+            )
+        ]
+    ]
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def build_objections_text():
+    objections = (
+        supabase.table("objection_answers")
+        .select("*")
+        .is_("product_id", "null")
+        .eq("is_active", True)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    if not objections.data:
+        return "هنوز پاسخی برای ابجکشن‌ها ثبت نشده است."
+
+    text = "🛡 پاسخ به ابجکشن‌ها:\n\n"
+
+    for item in objections.data:
+        text += f"ابجکشن: {item.get('objection')}\n"
+        text += f"پاسخ: {item.get('answer')}\n"
+        text += "------------------\n"
+
+    return text
+
+
+async def send_training_levels(target):
+    levels = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("is_active", True)
+        .order("level_number")
+        .execute()
+    )
+
+    if not levels.data:
+        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
+        return
+
+    text = "🎓 مسیر آموزشی فوراور\n"
+    text += "از صفر تا نتورکر حرفه‌ای\n\n"
+    text += "برای شروع، یکی از سطح‌ها را انتخاب کن:"
+
+    await target.answer(
+        text,
+        reply_markup=get_training_levels_keyboard(levels.data)
+    )
+
+
+async def send_training_level_steps(target, level_number: int):
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    level_item = level.data[0]
+
+    steps = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level_item.get("id"))
+        .eq("is_active", True)
+        .order("step_number")
+        .execute()
+    )
+
+    if not steps.data:
+        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
+        return
+
+    text = f"🎓 سطح {level_item.get('level_number')}: {level_item.get('title')}\n\n"
+    text += f"{level_item.get('description') or ''}\n\n"
+    text += "یکی از مرحله‌ها را انتخاب کن:"
+
+    await target.answer(
+        text,
+        reply_markup=get_training_steps_keyboard(level_number, steps.data)
+    )
+
+
+async def send_training_step_detail(target, level_number: int, step_number: int):
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    step = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level.data[0].get("id"))
+        .eq("step_number", step_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not step.data:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    item = step.data[0]
+
+    text = f"🎓 سطح {level_number} - مرحله {step_number}\n"
+    text += f"{item.get('title')}\n\n"
+    text += f"{item.get('content') or 'محتوای این آموزش بعداً تکمیل می‌شود.'}\n\n"
+    text += "بعد از مطالعه، روی دکمه شروع آزمون بزن."
+
+    await target.answer(
+        text,
+        reply_markup=get_training_step_detail_keyboard(
+            level_number,
+            step_number,
+            item.get("title")
+        )
+    )
+
+
+async def send_products_list(target):
+    products = (
+        supabase.table("products")
+        .select("*")
+        .eq("is_active", True)
+        .order("code")
+        .execute()
+    )
+
+    if not products.data:
+        await target.answer("هنوز محصولی ثبت نشده است.")
+        return
+
+    text = "📦 لیست محصولات\n\n"
+    text += "برای دیدن اطلاعات کامل، روی محصول موردنظر بزن:"
+
+    await target.answer(
+        text,
+        reply_markup=get_products_keyboard(products.data)
+    )
+
+
+async def send_product_detail(target, code: str):
+    result = (
+        supabase.table("products")
+        .select("*")
+        .eq("code", code)
+        .eq("is_active", True)
+        .execute()
+    )
+
+    if not result.data:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    product = result.data[0]
+
+    photo = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "photo")
+        .limit(1)
+        .execute()
+    )
+
+    if photo.data:
+        await target.answer_photo(
+            photo=photo.data[0].get("file_url"),
+            caption=f"📦 {product.get('fa_name')}"
+        )
+
+    video = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "video")
+        .limit(1)
+        .execute()
+    )
+
+    if video.data:
+        await target.answer_video(
+            video=video.data[0].get("file_url"),
+            caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}"
+        )
+
+    catalog = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "catalog")
+        .limit(1)
+        .execute()
+    )
+
+    if catalog.data:
+        await target.answer_document(
+            document=catalog.data[0].get("file_url"),
+            caption=f"📄 کاتالوگ {product.get('fa_name')}"
+        )
+
+    faqs = (
+        supabase.table("product_faqs")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("is_active", True)
+        .execute()
+    )
+
+    text = f"📦 {product.get('fa_name')}\n\n"
+    text += f"کد محصول: {product.get('code')}\n"
+    text += f"نام انگلیسی: {product.get('en_name') or '-'}\n"
+    text += f"حجم: {product.get('volume') or '-'}\n"
+    text += f"دسته‌بندی: {product.get('category') or '-'}\n\n"
+    text += f"ویژگی‌ها:\n{product.get('features') or '-'}\n\n"
+    text += f"مزایا:\n{product.get('benefits') or '-'}\n\n"
+    text += f"نحوه استفاده:\n{product.get('usage_method') or '-'}\n\n"
+    text += f"نکات مهم:\n{product.get('important_notes') or '-'}\n\n"
+    text += f"متن معرفی:\n{product.get('intro_text') or '-'}\n\n"
+
+    if faqs.data:
+        text += "❓ سوالات پرتکرار:\n\n"
+        for faq in faqs.data:
+            text += f"سوال: {faq.get('question')}\n"
+            text += f"پاسخ: {faq.get('answer')}\n\n"
+
+    await target.answer(
+        text,
+        reply_markup=get_product_detail_keyboard()
+    )
+
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     user = register_user(message)
@@ -454,144 +801,100 @@ async def training_levels_handler(message: Message):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
 
-    levels = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("is_active", True)
-        .order("level_number")
-        .execute()
-    )
+    await send_training_levels(message)
 
-    if not levels.data:
-        await message.answer("هنوز سطح آموزشی ثبت نشده است.")
+
+@dp.callback_query(F.data == "training_levels")
+async def training_levels_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
         return
 
-    text = "🎓 مسیر آموزشی فوراور\n"
-    text += "از صفر تا نتورکر حرفه‌ای\n\n"
-
-    for item in levels.data:
-        text += f"سطح {item.get('level_number')}: {item.get('title')}\n"
-        text += f"{item.get('description') or ''}\n"
-        text += f"مشاهده مرحله‌ها: /level {item.get('level_number')}\n"
-        text += "------------------\n"
-
-    await message.answer(text)
+    await callback.answer()
+    await send_training_levels(callback.message)
 
 
-@dp.message(F.text.startswith("/level "))
-async def training_level_steps_handler(message: Message):
-    if not can_view_content(message.from_user.id):
-        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+@dp.callback_query(F.data.startswith("training_level:"))
+async def training_level_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
         return
 
-    level_text = message.text.replace("/level ", "").strip()
+    level_text = callback.data.split(":")[1]
 
     if not level_text.isdigit():
-        await message.answer("❌ شماره سطح درست نیست.")
+        await callback.answer("شماره سطح درست نیست.", show_alert=True)
         return
 
-    level_number = int(level_text)
+    await callback.answer()
+    await send_training_level_steps(callback.message, int(level_text))
 
-    level = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
 
-    if not level.data:
-        await message.answer("❌ این سطح آموزشی پیدا نشد.")
+@dp.callback_query(F.data.startswith("training_step:"))
+async def training_step_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
         return
 
-    level_item = level.data[0]
-
-    steps = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level_item.get("id"))
-        .eq("is_active", True)
-        .order("step_number")
-        .execute()
-    )
-
-    if not steps.data:
-        await message.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
-        return
-
-    text = f"🎓 سطح {level_item.get('level_number')}: {level_item.get('title')}\n\n"
-
-    for step in steps.data:
-        text += f"مرحله {step.get('step_number')}: {step.get('title')}\n"
-        text += f"مشاهده: /step {level_number} {step.get('step_number')}\n"
-        text += "------------------\n"
-
-    await message.answer(text)
-
-
-@dp.message(F.text.startswith("/step "))
-async def training_step_detail_handler(message: Message):
-    if not can_view_content(message.from_user.id):
-        await message.answer("⛔ حساب شما هنوز فعال نیست.")
-        return
-
-    parts = message.text.split()
+    parts = callback.data.split(":")
 
     if len(parts) != 3:
-        await message.answer("❌ دستور درست نیست. مثال:\n/step 1 1")
+        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
         return
 
     level_text = parts[1]
     step_text = parts[2]
 
     if not level_text.isdigit() or not step_text.isdigit():
-        await message.answer("❌ شماره سطح و مرحله باید عدد باشد.")
+        await callback.answer("شماره سطح و مرحله درست نیست.", show_alert=True)
         return
 
-    level_number = int(level_text)
-    step_number = int(step_text)
-
-    level = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
+    await callback.answer()
+    await send_training_step_detail(
+        callback.message,
+        int(level_text),
+        int(step_text)
     )
 
-    if not level.data:
-        await message.answer("❌ این سطح آموزشی پیدا نشد.")
-        return
 
-    step = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level.data[0].get("id"))
-        .eq("step_number", step_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
+@dp.callback_query(F.data.startswith("training_quiz:"))
+async def training_quiz_callback(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(
+        "📝 آزمون ۴ گزینه‌ای این مرحله در قدم بعدی اضافه می‌شود."
     )
 
-    if not step.data:
-        await message.answer("❌ این مرحله آموزشی پیدا نشد.")
+
+@dp.callback_query(F.data == "show_objections")
+async def show_objections_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
         return
 
-    item = step.data[0]
+    await callback.answer()
+    await callback.message.answer(build_objections_text())
 
-    text = f"🎓 سطح {level_number} - مرحله {step_number}\n"
-    text += f"{item.get('title')}\n\n"
-    text += f"{item.get('content') or 'محتوای این آموزش بعداً تکمیل می‌شود.'}\n\n"
 
-    if item.get("title") == "پاسخ به ابجکشن‌ها":
-        text += "برای دیدن پاسخ‌های آماده، از منوی اصلی گزینه زیر را بزن:\n"
-        text += "🛡 پاسخ به ابجکشن‌ها\n\n"
+@dp.callback_query(F.data == "products_list")
+async def products_list_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
 
-    text += "آزمون ۴ گزینه‌ای این مرحله در قدم بعدی اضافه می‌شود."
+    await callback.answer()
+    await send_products_list(callback.message)
 
-    await message.answer(text)
+
+@dp.callback_query(F.data.startswith("product:"))
+async def product_detail_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+
+    code = callback.data.replace("product:", "").strip()
+
+    await callback.answer()
+    await send_product_detail(callback.message, code)
 
 
 @dp.message(F.text == "➕ افزودن پاسخ ابجکشن")
@@ -616,27 +919,7 @@ async def objections_list_handler(message: Message):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
 
-    objections = (
-        supabase.table("objection_answers")
-        .select("*")
-        .is_("product_id", "null")
-        .eq("is_active", True)
-        .order("created_at", desc=True)
-        .execute()
-    )
-
-    if not objections.data:
-        await message.answer("هنوز پاسخی برای ابجکشن‌ها ثبت نشده است.")
-        return
-
-    text = "🛡 پاسخ به ابجکشن‌ها:\n\n"
-
-    for item in objections.data:
-        text += f"ابجکشن: {item.get('objection')}\n"
-        text += f"پاسخ: {item.get('answer')}\n"
-        text += "------------------\n"
-
-    await message.answer(text)
+    await message.answer(build_objections_text())
 
 
 @dp.message(F.text == "➕ افزودن محصول")
@@ -729,26 +1012,7 @@ async def products_list_handler(message: Message):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
 
-    products = (
-        supabase.table("products")
-        .select("*")
-        .eq("is_active", True)
-        .order("code")
-        .execute()
-    )
-
-    if not products.data:
-        await message.answer("هنوز محصولی ثبت نشده است.")
-        return
-
-    text = "📦 لیست محصولات:\n\n"
-
-    for item in products.data:
-        text += f"{item.get('code')} - {item.get('fa_name')}\n"
-        text += f"مشاهده: /product {item.get('code')}\n"
-        text += "------------------\n"
-
-    await message.answer(text)
+    await send_products_list(message)
 
 
 @dp.message(F.text.startswith("/product "))
@@ -758,92 +1022,7 @@ async def product_detail_handler(message: Message):
         return
 
     code = message.text.replace("/product ", "").strip()
-
-    result = (
-        supabase.table("products")
-        .select("*")
-        .eq("code", code)
-        .eq("is_active", True)
-        .execute()
-    )
-
-    if not result.data:
-        await message.answer("❌ محصولی با این کد پیدا نشد.")
-        return
-
-    product = result.data[0]
-
-    photo = (
-        supabase.table("product_media")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("media_type", "photo")
-        .limit(1)
-        .execute()
-    )
-
-    if photo.data:
-        await message.answer_photo(
-            photo=photo.data[0].get("file_url"),
-            caption=f"📦 {product.get('fa_name')}"
-        )
-
-    video = (
-        supabase.table("product_media")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("media_type", "video")
-        .limit(1)
-        .execute()
-    )
-
-    if video.data:
-        await message.answer_video(
-            video=video.data[0].get("file_url"),
-            caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}"
-        )
-
-    catalog = (
-        supabase.table("product_media")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("media_type", "catalog")
-        .limit(1)
-        .execute()
-    )
-
-    if catalog.data:
-        await message.answer_document(
-            document=catalog.data[0].get("file_url"),
-            caption=f"📄 کاتالوگ {product.get('fa_name')}"
-        )
-
-    faqs = (
-        supabase.table("product_faqs")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("is_active", True)
-        .execute()
-    )
-
-    text = f"📦 {product.get('fa_name')}\n\n"
-    text += f"کد محصول: {product.get('code')}\n"
-    text += f"نام انگلیسی: {product.get('en_name') or '-'}\n"
-    text += f"حجم: {product.get('volume') or '-'}\n"
-    text += f"دسته‌بندی: {product.get('category') or '-'}\n\n"
-    text += f"ویژگی‌ها:\n{product.get('features') or '-'}\n\n"
-    text += f"مزایا:\n{product.get('benefits') or '-'}\n\n"
-    text += f"نحوه استفاده:\n{product.get('usage_method') or '-'}\n\n"
-    text += f"نکات مهم:\n{product.get('important_notes') or '-'}\n\n"
-    text += f"متن معرفی:\n{product.get('intro_text') or '-'}\n\n"
-
-    if faqs.data:
-        text += "❓ سوالات پرتکرار:\n\n"
-        for faq in faqs.data:
-            text += f"سوال: {faq.get('question')}\n"
-            text += f"پاسخ: {faq.get('answer')}\n\n"
-
-    await message.answer(text)
+    await send_product_detail(message, code)
 
 
 @dp.message(F.photo)
