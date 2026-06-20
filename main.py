@@ -16,6 +16,8 @@ dp = Dispatcher()
 
 VALID_ROLES = ["approved_customer", "content_contributor", "admin"]
 WAITING_PRODUCT_INPUT = {}
+WAITING_PHOTO_CODE = {}
+WAITING_PHOTO_FILE = {}
 
 
 def register_user(message: Message):
@@ -105,6 +107,7 @@ def get_menu(role: str):
 def get_products_menu():
     buttons = [
         [KeyboardButton(text="➕ افزودن محصول")],
+        [KeyboardButton(text="🖼 افزودن عکس محصول")],
         [KeyboardButton(text="📦 محصولات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ]
@@ -182,6 +185,10 @@ async def start_handler(message: Message):
 @dp.message(F.text == "🔙 بازگشت به منوی اصلی")
 async def back_to_main_menu_handler(message: Message):
     user = get_current_user(message.from_user.id)
+
+    WAITING_PRODUCT_INPUT.pop(message.from_user.id, None)
+    WAITING_PHOTO_CODE.pop(message.from_user.id, None)
+    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
 
     if not user or not user["is_active"]:
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
@@ -322,6 +329,8 @@ async def add_product_handler(message: Message):
         return
 
     WAITING_PRODUCT_INPUT[message.from_user.id] = True
+    WAITING_PHOTO_CODE.pop(message.from_user.id, None)
+    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
 
     await message.answer(
         "اطلاعات محصول را با همین قالب پر کن و بفرست:\n\n"
@@ -335,6 +344,23 @@ async def add_product_handler(message: Message):
         "نحوه استفاده: \n"
         "نکات مهم: \n"
         "متن معرفی: "
+    )
+
+
+@dp.message(F.text == "🖼 افزودن عکس محصول")
+async def add_product_photo_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
+        return
+
+    WAITING_PRODUCT_INPUT.pop(message.from_user.id, None)
+    WAITING_PHOTO_CODE[message.from_user.id] = True
+    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
+
+    await message.answer(
+        "کد محصولی که می‌خواهی عکسش را اضافه کنی بفرست.\n\n"
+        "مثال:\n"
+        "015"
     )
 
 
@@ -388,6 +414,21 @@ async def product_detail_handler(message: Message):
 
     product = result.data[0]
 
+    media = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "photo")
+        .limit(1)
+        .execute()
+    )
+
+    if media.data:
+        await message.answer_photo(
+            photo=media.data[0].get("file_url"),
+            caption=f"📦 {product.get('fa_name')}"
+        )
+
     text = f"📦 {product.get('fa_name')}\n\n"
     text += f"کد محصول: {product.get('code')}\n"
     text += f"نام انگلیسی: {product.get('en_name') or '-'}\n"
@@ -402,39 +443,90 @@ async def product_detail_handler(message: Message):
     await message.answer(text)
 
 
-@dp.message()
-async def product_input_handler(message: Message):
-    if not WAITING_PRODUCT_INPUT.get(message.from_user.id):
+@dp.message(F.photo)
+async def product_photo_file_handler(message: Message):
+    if not WAITING_PHOTO_FILE.get(message.from_user.id):
         return
 
     if not can_manage_content(message.from_user.id):
         await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
         return
 
-    product_data = parse_product_text(message.text)
+    product_id = WAITING_PHOTO_FILE.get(message.from_user.id)
+    photo_file_id = message.photo[-1].file_id
 
-    if not product_data["code"] or not product_data["fa_name"]:
+    supabase.table("product_media").insert({
+        "product_id": product_id,
+        "media_type": "photo",
+        "title": "عکس محصول",
+        "file_url": photo_file_id
+    }).execute()
+
+    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
+    WAITING_PHOTO_CODE.pop(message.from_user.id, None)
+
+    await message.answer("✅ عکس محصول با موفقیت ثبت شد.")
+
+
+@dp.message()
+async def text_handler(message: Message):
+    if WAITING_PHOTO_CODE.get(message.from_user.id):
+        if not can_manage_content(message.from_user.id):
+            await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
+            return
+
+        code = message.text.strip()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
+
+        if not product.data:
+            await message.answer("❌ محصولی با این کد پیدا نشد. دوباره کد درست را بفرست.")
+            return
+
+        WAITING_PHOTO_CODE.pop(message.from_user.id, None)
+        WAITING_PHOTO_FILE[message.from_user.id] = product.data[0]["id"]
+
         await message.answer(
-            "❌ کد محصول و نام فارسی الزامی است.\n\n"
-            "دوباره قالب را کامل بفرست."
+            f"محصول پیدا شد: {product.data[0].get('fa_name')}\n\n"
+            "حالا عکس محصول را همینجا ارسال کن."
         )
         return
 
-    try:
-        supabase.table("products").insert(product_data).execute()
-        WAITING_PRODUCT_INPUT.pop(message.from_user.id, None)
+    if WAITING_PRODUCT_INPUT.get(message.from_user.id):
+        if not can_manage_content(message.from_user.id):
+            await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
+            return
 
-        await message.answer(
-            "✅ محصول با موفقیت ثبت شد.\n\n"
-            f"کد محصول: {product_data['code']}\n"
-            f"نام محصول: {product_data['fa_name']}"
-        )
+        product_data = parse_product_text(message.text)
 
-    except Exception:
-        await message.answer(
-            "❌ خطا در ثبت محصول.\n"
-            "احتمالاً کد محصول تکراری است."
-        )
+        if not product_data["code"] or not product_data["fa_name"]:
+            await message.answer(
+                "❌ کد محصول و نام فارسی الزامی است.\n\n"
+                "دوباره قالب را کامل بفرست."
+            )
+            return
+
+        try:
+            supabase.table("products").insert(product_data).execute()
+            WAITING_PRODUCT_INPUT.pop(message.from_user.id, None)
+
+            await message.answer(
+                "✅ محصول با موفقیت ثبت شد.\n\n"
+                f"کد محصول: {product_data['code']}\n"
+                f"نام محصول: {product_data['fa_name']}"
+            )
+
+        except Exception:
+            await message.answer(
+                "❌ خطا در ثبت محصول.\n"
+                "احتمالاً کد محصول تکراری است."
+            )
 
 
 async def main():
