@@ -132,6 +132,7 @@ def get_menu(role: str):
             [KeyboardButton(text="📦 محصولات")],
             [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
             [KeyboardButton(text="🎓 آموزش‌ها")],
+            [KeyboardButton(text="🔎 جستجو")],
             [KeyboardButton(text="✍️ ارسال سوال")],
             [KeyboardButton(text="❓ سوالات پرتکرار")],
         ]
@@ -1132,7 +1133,261 @@ async def send_public_faq_search_result(target, keyword: str):
         )
         return
 
+
     await target.answer(format_public_faqs(matched_items, f"🔎 نتیجه جستجو برای: {keyword}"))
+
+
+def normalize_search_text(value):
+    text = str(value or "").strip().lower()
+    replacements = {
+        "ي": "ی",
+        "ك": "ک",
+        "أ": "ا",
+        "إ": "ا",
+        "آ": "ا",
+        "ة": "ه",
+        "\u200c": " ",
+        "‌": " ",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return " ".join(text.split())
+
+
+def contains_search_keyword(fields, keyword: str):
+    normalized_keyword = normalize_search_text(keyword)
+    if not normalized_keyword:
+        return False
+
+    for field in fields:
+        if normalized_keyword in normalize_search_text(field):
+            return True
+
+    return False
+
+
+def short_text(value, limit: int = 95):
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def format_global_search_section(title: str, items: list[str], limit: int = 5):
+    if not items:
+        return ""
+
+    text = f"\n{title}\n"
+    for index, item in enumerate(items[:limit], start=1):
+        text += f"{index}. {item}\n"
+
+    if len(items) > limit:
+        text += f"و {len(items) - limit} مورد دیگر...\n"
+
+    return text
+
+
+async def send_global_search_result(target, keyword: str):
+    keyword = keyword.strip()
+
+    if not keyword:
+        await target.answer("❌ عبارت جستجو نمی‌تواند خالی باشد.")
+        return
+
+    product_matches = []
+    product_faq_matches = []
+    training_matches = []
+    objection_matches = []
+    general_faq_matches = []
+
+    try:
+        products_result = (
+            supabase.table("products")
+            .select("*")
+            .eq("is_active", True)
+            .limit(300)
+            .execute()
+        )
+        products = products_result.data or []
+        product_by_id = {item.get("id"): item for item in products}
+
+        for product in products:
+            if contains_search_keyword([
+                product.get("code"),
+                product.get("fa_name"),
+                product.get("en_name"),
+                product.get("category"),
+                product.get("features"),
+                product.get("benefits"),
+                product.get("usage_method"),
+                product.get("important_notes"),
+                product.get("intro_text"),
+            ], keyword):
+                product_matches.append(product)
+
+        product_faqs_result = (
+            supabase.table("product_faqs")
+            .select("*")
+            .eq("is_active", True)
+            .limit(300)
+            .execute()
+        )
+
+        for faq in product_faqs_result.data or []:
+            if contains_search_keyword([faq.get("question"), faq.get("answer")], keyword):
+                product_faq_matches.append(faq)
+
+        levels_result = (
+            supabase.table("training_levels")
+            .select("*")
+            .eq("is_active", True)
+            .limit(100)
+            .execute()
+        )
+        levels = levels_result.data or []
+        level_by_id = {item.get("id"): item for item in levels}
+
+        steps_result = (
+            supabase.table("training_steps")
+            .select("*")
+            .eq("is_active", True)
+            .limit(500)
+            .execute()
+        )
+
+        for step in steps_result.data or []:
+            level = level_by_id.get(step.get("level_id"), {})
+            if contains_search_keyword([
+                level.get("title"),
+                level.get("description"),
+                step.get("title"),
+                step.get("content"),
+            ], keyword):
+                training_matches.append({"level": level, "step": step})
+
+        objections_result = (
+            supabase.table("objection_answers")
+            .select("*")
+            .eq("is_active", True)
+            .limit(300)
+            .execute()
+        )
+
+        for item in objections_result.data or []:
+            if contains_search_keyword([item.get("objection"), item.get("answer")], keyword):
+                objection_matches.append(item)
+
+        general_faq_result = (
+            supabase.table("unanswered_questions")
+            .select("*")
+            .eq("status", "answered")
+            .eq("is_active", True)
+            .limit(300)
+            .execute()
+        )
+
+        for item in general_faq_result.data or []:
+            if contains_search_keyword([item.get("question"), item.get("answer")], keyword):
+                general_faq_matches.append(item)
+
+    except Exception:
+        await target.answer("❌ خطا در جستجو. چند لحظه بعد دوباره امتحان کن.")
+        return
+
+    text = f"🔎 نتیجه جستجو برای: {keyword}\n"
+
+    product_lines = []
+    for product in product_matches:
+        product_lines.append(
+            f"{product.get('code')} - {product.get('fa_name')}\n"
+            f"   {short_text(product.get('intro_text') or product.get('benefits') or product.get('features'))}"
+        )
+
+    product_faq_lines = []
+    for faq in product_faq_matches:
+        product = product_by_id.get(faq.get("product_id"), {})
+        product_name = product.get("fa_name") or "محصول"
+        product_code = product.get("code") or "-"
+        product_faq_lines.append(
+            f"{product_name} ({product_code})\n"
+            f"   سوال: {short_text(faq.get('question'))}\n"
+            f"   پاسخ: {short_text(faq.get('answer'))}"
+        )
+
+    training_lines = []
+    for item in training_matches:
+        level = item.get("level") or {}
+        step = item.get("step") or {}
+        training_lines.append(
+            f"سطح {level.get('level_number')} - مرحله {step.get('step_number')}: {step.get('title')}\n"
+            f"   {short_text(step.get('content'))}"
+        )
+
+    objection_lines = []
+    for item in objection_matches:
+        objection_lines.append(
+            f"ابجکشن: {short_text(item.get('objection'))}\n"
+            f"   پاسخ: {short_text(item.get('answer'))}"
+        )
+
+    general_faq_lines = []
+    for item in general_faq_matches:
+        general_faq_lines.append(
+            f"سوال: {short_text(item.get('question'))}\n"
+            f"   پاسخ: {short_text(item.get('answer'))}"
+        )
+
+    text += format_global_search_section("\n📦 محصولات", product_lines)
+    text += format_global_search_section("\n❓ سوالات محصول", product_faq_lines)
+    text += format_global_search_section("\n🎓 آموزش‌ها", training_lines)
+    text += format_global_search_section("\n🛡 ابجکشن‌ها", objection_lines)
+    text += format_global_search_section("\n❓ سوالات پرتکرار عمومی", general_faq_lines)
+
+    total = (
+        len(product_matches)
+        + len(product_faq_matches)
+        + len(training_matches)
+        + len(objection_matches)
+        + len(general_faq_matches)
+    )
+
+    if total == 0:
+        await target.answer(
+            "🔎 نتیجه جستجو\n\n"
+            f"برای عبارت «{keyword}» چیزی پیدا نشد.\n\n"
+            "می‌توانی با یک کلمه کوتاه‌تر جستجو کنی یا از دکمه ✍️ ارسال سوال استفاده کنی."
+        )
+        return
+
+    text += "\nبرای باز کردن سریع محصول یا آموزش، از دکمه‌های زیر استفاده کن."
+
+    buttons = []
+
+    for product in product_matches[:5]:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📦 {product.get('code')} - {product.get('fa_name')}",
+                callback_data=f"product_action:view:{product.get('code')}",
+            )
+        ])
+
+    for item in training_matches[:5]:
+        level = item.get("level") or {}
+        step = item.get("step") or {}
+        if level.get("level_number") and step.get("step_number"):
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"🎓 سطح {level.get('level_number')} - مرحله {step.get('step_number')}",
+                    callback_data=f"training_step:{level.get('level_number')}:{step.get('step_number')}",
+                )
+            ])
+
+    reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+
+    if len(text) > 3900:
+        text = text[:3900] + "\n\nنتایج بیشتر بود؛ برای نتیجه دقیق‌تر با کلمه کوتاه‌تر یا دقیق‌تر جستجو کن."
+
+    await target.answer(text, reply_markup=reply_markup)
 
 
 @dp.message(CommandStart())
@@ -1913,6 +2168,30 @@ async def delete_media_photo_step_callback(callback: CallbackQuery):
 
 
 
+@dp.message(F.text == "🔎 جستجو")
+async def global_search_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    set_state(message.from_user.id, "global_search")
+
+    await message.answer(
+        "🔎 جستجو در کل ربات\n\n"
+        "یک کلمه یا عبارت بفرست تا داخل این بخش‌ها جستجو کنم:\n"
+        "📦 محصولات\n"
+        "❓ سوالات محصول\n"
+        "🎓 آموزش‌ها\n"
+        "🛡 ابجکشن‌ها\n"
+        "❓ سوالات پرتکرار عمومی\n\n"
+        "مثال:\n"
+        "آلوئه ورا\n"
+        "ثبت سفارش\n"
+        "اعتراض قیمت"
+    )
+
+
 @dp.message(F.text == "✍️ ارسال سوال")
 async def ask_question_handler(message: Message):
     if not can_view_content(message.from_user.id):
@@ -2188,9 +2467,13 @@ async def text_handler(message: Message):
 
     state_type = state.get("type")
 
+    if state_type == "global_search":
+        keyword = message.text.strip()
+        await send_global_search_result(message, keyword)
+        return
+
     if state_type == "public_faq_search":
         keyword = message.text.strip()
-        clear_waiting_states(message.from_user.id)
         await send_public_faq_search_result(message, keyword)
         return
 
