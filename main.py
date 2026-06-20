@@ -37,6 +37,7 @@ WAITING_FAQ_CODE = {}
 WAITING_FAQ_INPUT = {}
 WAITING_OBJECTION_INPUT = {}
 WAITING_TRAINING_EDIT_INPUT = {}
+WAITING_TRAINING_MEDIA_FILE = {}
 
 
 def register_user(message: Message):
@@ -113,6 +114,7 @@ def clear_waiting_states(telegram_id: int):
     WAITING_FAQ_INPUT.pop(telegram_id, None)
     WAITING_OBJECTION_INPUT.pop(telegram_id, None)
     WAITING_TRAINING_EDIT_INPUT.pop(telegram_id, None)
+    WAITING_TRAINING_MEDIA_FILE.pop(telegram_id, None)
 
 
 def get_menu(role: str):
@@ -170,6 +172,9 @@ def get_objections_menu():
 def get_trainings_menu():
     buttons = [
         [KeyboardButton(text="✏️ ویرایش محتوای آموزش")],
+        [KeyboardButton(text="📄 افزودن PDF آموزش")],
+        [KeyboardButton(text="🎥 افزودن ویدئو آموزش")],
+        [KeyboardButton(text="🖼 افزودن عکس آموزش")],
         [KeyboardButton(text="🎓 آموزش‌ها")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ]
@@ -393,6 +398,61 @@ def get_edit_training_steps_keyboard(level_number, steps):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_training_media_label(media_type: str):
+    if media_type == "pdf":
+        return "PDF آموزش"
+    if media_type == "video":
+        return "ویدئو آموزش"
+    if media_type == "photo":
+        return "عکس آموزش"
+    return "فایل آموزش"
+
+
+def get_training_media_column(media_type: str):
+    if media_type == "pdf":
+        return "pdf_url"
+    if media_type == "video":
+        return "video_url"
+    if media_type == "photo":
+        return "image_url"
+    return ""
+
+
+def get_training_media_levels_keyboard(levels, media_type: str):
+    buttons = []
+
+    for item in levels:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"سطح {item.get('level_number')}: {item.get('title')}",
+                callback_data=f"media_level:{media_type}:{item.get('level_number')}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_training_media_steps_keyboard(level_number: int, steps, media_type: str):
+    buttons = []
+
+    for step in steps:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"مرحله {step.get('step_number')}: {step.get('title')}",
+                callback_data=f"media_step:{media_type}:{level_number}:{step.get('step_number')}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 بازگشت به سطح‌ها",
+            callback_data=f"media_levels:{media_type}"
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_products_keyboard(products):
     buttons = []
 
@@ -535,6 +595,24 @@ async def send_training_step_detail(target, level_number: int, step_number: int)
 
     item = step.data[0]
 
+    if item.get("image_url"):
+        await target.answer_photo(
+            photo=item.get("image_url"),
+            caption=f"🖼 عکس آموزش: {item.get('title')}"
+        )
+
+    if item.get("video_url"):
+        await target.answer_video(
+            video=item.get("video_url"),
+            caption=f"🎥 ویدئو آموزش: {item.get('title')}"
+        )
+
+    if item.get("pdf_url"):
+        await target.answer_document(
+            document=item.get("pdf_url"),
+            caption=f"📄 PDF آموزش: {item.get('title')}"
+        )
+
     text = f"🎓 سطح {level_number} - مرحله {step_number}\n"
     text += f"{item.get('title')}\n\n"
     text += f"{item.get('content') or 'محتوای این آموزش بعداً تکمیل می‌شود.'}\n\n"
@@ -656,6 +734,126 @@ async def prepare_edit_training_step(target, telegram_id: int, level_number: int
     text += "هر متنی بفرستی جایگزین محتوای فعلی می‌شود."
 
     await target.answer(text)
+
+
+async def send_training_media_levels(target, media_type: str):
+    media_label = get_training_media_label(media_type)
+
+    levels = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("is_active", True)
+        .order("level_number")
+        .execute()
+    )
+
+    if not levels.data:
+        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
+        return
+
+    text = f"➕ افزودن {media_label}\n\n"
+    text += "اول سطح آموزشی را انتخاب کن:"
+
+    await target.answer(
+        text,
+        reply_markup=get_training_media_levels_keyboard(levels.data, media_type)
+    )
+
+
+async def send_training_media_steps(target, media_type: str, level_number: int):
+    media_label = get_training_media_label(media_type)
+
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    level_item = level.data[0]
+
+    steps = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level_item.get("id"))
+        .eq("is_active", True)
+        .order("step_number")
+        .execute()
+    )
+
+    if not steps.data:
+        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
+        return
+
+    text = f"➕ افزودن {media_label}\n\n"
+    text += f"سطح {level_number}: {level_item.get('title')}\n\n"
+    text += "حالا مرحله آموزشی را انتخاب کن:"
+
+    await target.answer(
+        text,
+        reply_markup=get_training_media_steps_keyboard(level_number, steps.data, media_type)
+    )
+
+
+async def prepare_training_media_step(target, telegram_id: int, media_type: str, level_number: int, step_number: int):
+    media_label = get_training_media_label(media_type)
+    column_name = get_training_media_column(media_type)
+
+    if not column_name:
+        await target.answer("❌ نوع فایل آموزشی درست نیست.")
+        return
+
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    step = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level.data[0].get("id"))
+        .eq("step_number", step_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not step.data:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    item = step.data[0]
+
+    WAITING_TRAINING_MEDIA_FILE[telegram_id] = {
+        "step_id": item.get("id"),
+        "level_number": level_number,
+        "step_number": step_number,
+        "title": item.get("title"),
+        "media_type": media_type,
+        "media_label": media_label,
+        "column_name": column_name
+    }
+
+    await target.answer(
+        "✅ مرحله انتخاب شد.\n\n"
+        f"سطح {level_number} - مرحله {step_number}\n"
+        f"{item.get('title')}\n\n"
+        f"حالا {media_label} را بفرست."
+    )
 
 
 async def send_products_list(target):
@@ -951,6 +1149,101 @@ async def edit_training_content_handler(message: Message):
     await send_edit_training_levels(message)
 
 
+@dp.message(F.text == "📄 افزودن PDF آموزش")
+async def add_training_pdf_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی افزودن PDF آموزش ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    await send_training_media_levels(message, "pdf")
+
+
+@dp.message(F.text == "🎥 افزودن ویدئو آموزش")
+async def add_training_video_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی افزودن ویدئو آموزش ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    await send_training_media_levels(message, "video")
+
+
+@dp.message(F.text == "🖼 افزودن عکس آموزش")
+async def add_training_photo_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی افزودن عکس آموزش ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    await send_training_media_levels(message, "photo")
+
+
+@dp.callback_query(F.data.startswith("media_levels:"))
+async def training_media_levels_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی افزودن فایل آموزش ندارید.", show_alert=True)
+        return
+
+    media_type = callback.data.split(":")[1]
+
+    await callback.answer()
+    await send_training_media_levels(callback.message, media_type)
+
+
+@dp.callback_query(F.data.startswith("media_level:"))
+async def training_media_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی افزودن فایل آموزش ندارید.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+
+    if len(parts) != 3:
+        await callback.answer("اطلاعات سطح درست نیست.", show_alert=True)
+        return
+
+    media_type = parts[1]
+    level_text = parts[2]
+
+    if not level_text.isdigit():
+        await callback.answer("شماره سطح درست نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_training_media_steps(callback.message, media_type, int(level_text))
+
+
+@dp.callback_query(F.data.startswith("media_step:"))
+async def training_media_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی افزودن فایل آموزش ندارید.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+
+    if len(parts) != 4:
+        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
+        return
+
+    media_type = parts[1]
+    level_text = parts[2]
+    step_text = parts[3]
+
+    if not level_text.isdigit() or not step_text.isdigit():
+        await callback.answer("شماره سطح و مرحله درست نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await prepare_training_media_step(
+        callback.message,
+        callback.from_user.id,
+        media_type,
+        int(level_text),
+        int(step_text)
+    )
+
+
 @dp.callback_query(F.data == "edit_training_levels")
 async def edit_training_levels_callback(callback: CallbackQuery):
     if not can_manage_content(callback.from_user.id):
@@ -1237,6 +1530,28 @@ async def product_detail_handler(message: Message):
 
 @dp.message(F.photo)
 async def product_photo_file_handler(message: Message):
+    if WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id):
+        media_data = WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id)
+
+        if media_data["media_type"] != "photo":
+            await message.answer("❌ لطفاً فایل درست را بفرست.")
+            return
+
+        photo_file_id = message.photo[-1].file_id
+
+        supabase.table("training_steps").update({
+            media_data["column_name"]: photo_file_id
+        }).eq("id", media_data["step_id"]).execute()
+
+        clear_waiting_states(message.from_user.id)
+
+        await message.answer(
+            "✅ عکس آموزش با موفقیت ثبت شد.\n\n"
+            f"سطح {media_data['level_number']} - مرحله {media_data['step_number']}\n"
+            f"{media_data['title']}"
+        )
+        return
+
     if not WAITING_PHOTO_FILE.get(message.from_user.id):
         return
 
@@ -1257,6 +1572,28 @@ async def product_photo_file_handler(message: Message):
 
 @dp.message(F.video)
 async def product_video_file_handler(message: Message):
+    if WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id):
+        media_data = WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id)
+
+        if media_data["media_type"] != "video":
+            await message.answer("❌ لطفاً فایل درست را بفرست.")
+            return
+
+        video_file_id = message.video.file_id
+
+        supabase.table("training_steps").update({
+            media_data["column_name"]: video_file_id
+        }).eq("id", media_data["step_id"]).execute()
+
+        clear_waiting_states(message.from_user.id)
+
+        await message.answer(
+            "✅ ویدئو آموزش با موفقیت ثبت شد.\n\n"
+            f"سطح {media_data['level_number']} - مرحله {media_data['step_number']}\n"
+            f"{media_data['title']}"
+        )
+        return
+
     if not WAITING_VIDEO_FILE.get(message.from_user.id):
         return
 
@@ -1277,6 +1614,28 @@ async def product_video_file_handler(message: Message):
 
 @dp.message(F.document)
 async def product_catalog_file_handler(message: Message):
+    if WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id):
+        media_data = WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id)
+
+        if media_data["media_type"] != "pdf":
+            await message.answer("❌ لطفاً فایل درست را بفرست.")
+            return
+
+        document_file_id = message.document.file_id
+
+        supabase.table("training_steps").update({
+            media_data["column_name"]: document_file_id
+        }).eq("id", media_data["step_id"]).execute()
+
+        clear_waiting_states(message.from_user.id)
+
+        await message.answer(
+            "✅ PDF آموزش با موفقیت ثبت شد.\n\n"
+            f"سطح {media_data['level_number']} - مرحله {media_data['step_number']}\n"
+            f"{media_data['title']}"
+        )
+        return
+
     if not WAITING_CATALOG_FILE.get(message.from_user.id):
         return
 
