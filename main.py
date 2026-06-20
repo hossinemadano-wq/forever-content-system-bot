@@ -9,7 +9,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
 )
 from aiogram.filters import CommandStart
 
@@ -24,20 +24,20 @@ dp = Dispatcher()
 
 VALID_ROLES = ["approved_customer", "content_contributor", "admin"]
 
-WAITING_PRODUCT_INPUT = {}
-WAITING_PHOTO_CODE = {}
-WAITING_PHOTO_FILE = {}
-WAITING_VIDEO_CODE = {}
-WAITING_VIDEO_FILE = {}
-WAITING_CATALOG_CODE = {}
-WAITING_CATALOG_FILE = {}
-WAITING_EDIT_CODE = {}
-WAITING_EDIT_INPUT = {}
-WAITING_FAQ_CODE = {}
-WAITING_FAQ_INPUT = {}
-WAITING_OBJECTION_INPUT = {}
-WAITING_TRAINING_EDIT_INPUT = {}
-WAITING_TRAINING_MEDIA_FILE = {}
+# همه حالت‌های انتظار اینجا نگهداری می‌شود
+USER_STATE = {}
+
+
+def set_state(telegram_id: int, state_type: str, data: dict | None = None):
+    USER_STATE[telegram_id] = {"type": state_type, **(data or {})}
+
+
+def get_state(telegram_id: int):
+    return USER_STATE.get(telegram_id)
+
+
+def clear_waiting_states(telegram_id: int):
+    USER_STATE.pop(telegram_id, None)
 
 
 def register_user(message: Message):
@@ -55,7 +55,7 @@ def register_user(message: Message):
     if existing_user.data:
         supabase.table("app_users").update({
             "full_name": full_name,
-            "username": username
+            "username": username,
         }).eq("telegram_id", telegram_id).execute()
 
         return existing_user.data[0]
@@ -65,7 +65,7 @@ def register_user(message: Message):
         "full_name": full_name,
         "username": username,
         "role": "approved_customer",
-        "is_active": False
+        "is_active": False,
     }).execute()
 
     return new_user.data[0]
@@ -87,34 +87,27 @@ def get_current_user(telegram_id: int):
 
 def is_admin(telegram_id: int):
     user = get_current_user(telegram_id)
-    return user and user["role"] == "admin"
+    return user and user.get("role") == "admin"
 
 
 def can_manage_content(telegram_id: int):
     user = get_current_user(telegram_id)
-    return user and user["role"] in ["admin", "content_contributor"]
+    return user and user.get("is_active") and user.get("role") in ["admin", "content_contributor"]
 
 
 def can_view_content(telegram_id: int):
     user = get_current_user(telegram_id)
-    return user and user["is_active"]
+    return user and user.get("is_active")
 
 
-def clear_waiting_states(telegram_id: int):
-    WAITING_PRODUCT_INPUT.pop(telegram_id, None)
-    WAITING_PHOTO_CODE.pop(telegram_id, None)
-    WAITING_PHOTO_FILE.pop(telegram_id, None)
-    WAITING_VIDEO_CODE.pop(telegram_id, None)
-    WAITING_VIDEO_FILE.pop(telegram_id, None)
-    WAITING_CATALOG_CODE.pop(telegram_id, None)
-    WAITING_CATALOG_FILE.pop(telegram_id, None)
-    WAITING_EDIT_CODE.pop(telegram_id, None)
-    WAITING_EDIT_INPUT.pop(telegram_id, None)
-    WAITING_FAQ_CODE.pop(telegram_id, None)
-    WAITING_FAQ_INPUT.pop(telegram_id, None)
-    WAITING_OBJECTION_INPUT.pop(telegram_id, None)
-    WAITING_TRAINING_EDIT_INPUT.pop(telegram_id, None)
-    WAITING_TRAINING_MEDIA_FILE.pop(telegram_id, None)
+def get_role_label(role: str):
+    if role == "admin":
+        return "ادمین"
+    if role == "content_contributor":
+        return "ویراستار / واردکننده اطلاعات"
+    if role == "approved_customer":
+        return "مشتری تأییدشده"
+    return role or "نامشخص"
 
 
 def get_menu(role: str):
@@ -124,23 +117,31 @@ def get_menu(role: str):
             [KeyboardButton(text="📦 مدیریت محصولات")],
             [KeyboardButton(text="🛡 مدیریت ابجکشن‌ها")],
             [KeyboardButton(text="🎓 مدیریت آموزش‌ها")],
-            [KeyboardButton(text="❓ سوالات بی‌جواب")]
+            [KeyboardButton(text="❓ سوالات بی‌جواب")],
         ]
     elif role == "content_contributor":
         buttons = [
             [KeyboardButton(text="📦 مدیریت محصولات")],
             [KeyboardButton(text="🛡 مدیریت ابجکشن‌ها")],
             [KeyboardButton(text="🎓 مدیریت آموزش‌ها")],
-            [KeyboardButton(text="📝 افزودن محتوا")]
+            [KeyboardButton(text="📝 افزودن محتوا")],
         ]
     else:
         buttons = [
             [KeyboardButton(text="📦 محصولات")],
             [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
             [KeyboardButton(text="🎓 آموزش‌ها")],
-            [KeyboardButton(text="❓ سوالات پرتکرار")]
+            [KeyboardButton(text="❓ سوالات پرتکرار")],
         ]
 
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def get_users_menu():
+    buttons = [
+        [KeyboardButton(text="📋 لیست کاربران")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
+    ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -153,9 +154,8 @@ def get_products_menu():
         [KeyboardButton(text="❓ افزودن سوال محصول")],
         [KeyboardButton(text="✏️ ویرایش محصول")],
         [KeyboardButton(text="📦 محصولات")],
-        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
     ]
-
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -163,22 +163,23 @@ def get_objections_menu():
     buttons = [
         [KeyboardButton(text="➕ افزودن پاسخ ابجکشن")],
         [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
-        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
     ]
-
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
 def get_trainings_menu():
     buttons = [
         [KeyboardButton(text="✏️ ویرایش محتوای آموزش")],
+        [KeyboardButton(text="✏️ ویرایش عنوان مرحله")],
+        [KeyboardButton(text="✏️ ویرایش توضیح سطح")],
         [KeyboardButton(text="📄 افزودن PDF آموزش")],
         [KeyboardButton(text="🎥 افزودن ویدئو آموزش")],
         [KeyboardButton(text="🖼 افزودن عکس آموزش")],
+        [KeyboardButton(text="🗑 حذف/غیرفعال کردن فایل آموزش")],
         [KeyboardButton(text="🎓 آموزش‌ها")],
-        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
     ]
-
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -193,12 +194,10 @@ def parse_product_text(text: str):
         "benefits": "",
         "usage_method": "",
         "important_notes": "",
-        "intro_text": ""
+        "intro_text": "",
     }
 
-    lines = text.splitlines()
-
-    for line in lines:
+    for line in text.splitlines():
         if ":" not in line:
             continue
 
@@ -231,14 +230,9 @@ def parse_product_text(text: str):
 
 
 def parse_faq_text(text: str):
-    data = {
-        "question": "",
-        "answer": ""
-    }
+    data = {"question": "", "answer": ""}
 
-    lines = text.splitlines()
-
-    for line in lines:
+    for line in text.splitlines():
         if ":" not in line:
             continue
 
@@ -255,14 +249,9 @@ def parse_faq_text(text: str):
 
 
 def parse_objection_text(text: str):
-    data = {
-        "objection": "",
-        "answer": ""
-    }
+    data = {"objection": "", "answer": ""}
 
-    lines = text.splitlines()
-
-    for line in lines:
+    for line in text.splitlines():
         if ":" not in line:
             continue
 
@@ -293,38 +282,51 @@ def product_template(product):
     )
 
 
-def get_training_levels_keyboard(levels):
+def get_products_keyboard(products, action: str = "view"):
     buttons = []
 
-    for item in levels:
+    for item in products:
         buttons.append([
             InlineKeyboardButton(
-                text=f"سطح {item.get('level_number')}: {item.get('title')}",
-                callback_data=f"training_level:{item.get('level_number')}"
+                text=f"{item.get('code')} - {item.get('fa_name')}",
+                callback_data=f"product_action:{action}:{item.get('code')}",
             )
         ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_training_steps_keyboard(level_number, steps):
+def get_product_detail_keyboard():
+    buttons = [[InlineKeyboardButton(text="🔙 بازگشت به محصولات", callback_data="products_list")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_training_levels_keyboard(levels, callback_prefix: str = "training_level"):
+    buttons = []
+
+    for item in levels:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"سطح {item.get('level_number')}: {item.get('title')}",
+                callback_data=f"{callback_prefix}:{item.get('level_number')}",
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_training_steps_keyboard(level_number, steps, callback_prefix: str = "training_step", back_callback: str = "training_levels"):
     buttons = []
 
     for step in steps:
         buttons.append([
             InlineKeyboardButton(
                 text=f"مرحله {step.get('step_number')}: {step.get('title')}",
-                callback_data=f"training_step:{level_number}:{step.get('step_number')}"
+                callback_data=f"{callback_prefix}:{level_number}:{step.get('step_number')}",
             )
         ])
 
-    buttons.append([
-        InlineKeyboardButton(
-            text="🔙 بازگشت به سطح‌ها",
-            callback_data="training_levels"
-        )
-    ])
-
+    buttons.append([InlineKeyboardButton(text="🔙 بازگشت به سطح‌ها", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -332,68 +334,11 @@ def get_training_step_detail_keyboard(level_number, step_number, title):
     buttons = []
 
     if title == "پاسخ به ابجکشن‌ها":
-        buttons.append([
-            InlineKeyboardButton(
-                text="🛡 دیدن پاسخ به ابجکشن‌ها",
-                callback_data="show_objections"
-            )
-        ])
+        buttons.append([InlineKeyboardButton(text="🛡 دیدن پاسخ به ابجکشن‌ها", callback_data="show_objections")])
 
-    buttons.append([
-        InlineKeyboardButton(
-            text="📝 شروع آزمون",
-            callback_data=f"training_quiz:{level_number}:{step_number}"
-        )
-    ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            text="🔙 بازگشت به مرحله‌ها",
-            callback_data=f"training_level:{level_number}"
-        )
-    ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            text="🏠 بازگشت به سطح‌ها",
-            callback_data="training_levels"
-        )
-    ])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def get_edit_training_levels_keyboard(levels):
-    buttons = []
-
-    for item in levels:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"سطح {item.get('level_number')}: {item.get('title')}",
-                callback_data=f"edit_training_level:{item.get('level_number')}"
-            )
-        ])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def get_edit_training_steps_keyboard(level_number, steps):
-    buttons = []
-
-    for step in steps:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"مرحله {step.get('step_number')}: {step.get('title')}",
-                callback_data=f"edit_training_step:{level_number}:{step.get('step_number')}"
-            )
-        ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            text="🔙 بازگشت به سطح‌ها",
-            callback_data="edit_training_levels"
-        )
-    ])
+    buttons.append([InlineKeyboardButton(text="📝 شروع آزمون", callback_data=f"training_quiz:{level_number}:{step_number}")])
+    buttons.append([InlineKeyboardButton(text="🔙 بازگشت به مرحله‌ها", callback_data=f"training_level:{level_number}")])
+    buttons.append([InlineKeyboardButton(text="🏠 بازگشت به سطح‌ها", callback_data="training_levels")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -418,65 +363,12 @@ def get_training_media_column(media_type: str):
     return ""
 
 
-def get_training_media_levels_keyboard(levels, media_type: str):
-    buttons = []
-
-    for item in levels:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"سطح {item.get('level_number')}: {item.get('title')}",
-                callback_data=f"media_level:{media_type}:{item.get('level_number')}"
-            )
-        ])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def get_training_media_steps_keyboard(level_number: int, steps, media_type: str):
-    buttons = []
-
-    for step in steps:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"مرحله {step.get('step_number')}: {step.get('title')}",
-                callback_data=f"media_step:{media_type}:{level_number}:{step.get('step_number')}"
-            )
-        ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            text="🔙 بازگشت به سطح‌ها",
-            callback_data=f"media_levels:{media_type}"
-        )
-    ])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def get_products_keyboard(products):
-    buttons = []
-
-    for item in products:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"{item.get('code')} - {item.get('fa_name')}",
-                callback_data=f"product:{item.get('code')}"
-            )
-        ])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def get_product_detail_keyboard():
+def get_training_media_type_keyboard(action: str):
     buttons = [
-        [
-            InlineKeyboardButton(
-                text="🔙 بازگشت به محصولات",
-                callback_data="products_list"
-            )
-        ]
+        [InlineKeyboardButton(text="📄 PDF آموزش", callback_data=f"{action}:pdf")],
+        [InlineKeyboardButton(text="🎥 ویدئو آموزش", callback_data=f"{action}:video")],
+        [InlineKeyboardButton(text="🖼 عکس آموزش", callback_data=f"{action}:photo")],
     ]
-
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -503,360 +395,72 @@ def build_objections_text():
     return text
 
 
-async def send_training_levels(target):
-    levels = (
-        supabase.table("training_levels")
+async def send_users_list(target):
+    users = (
+        supabase.table("app_users")
         .select("*")
-        .eq("is_active", True)
-        .order("level_number")
+        .order("created_at", desc=True)
+        .limit(40)
         .execute()
     )
 
-    if not levels.data:
-        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
+    if not users.data:
+        await target.answer("هیچ کاربری ثبت نشده است.")
         return
 
-    text = "🎓 مسیر آموزشی فوراور\n"
-    text += "از صفر تا نتورکر حرفه‌ای\n\n"
-    text += "برای شروع، یکی از سطح‌ها را انتخاب کن:"
+    buttons = []
+    for item in users.data:
+        active_text = "✅" if item.get("is_active") else "⏳"
+        username = f"@{item.get('username')}" if item.get("username") else "بدون یوزرنیم"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{active_text} {item.get('full_name')} - {username}",
+                callback_data=f"admin_user:{item.get('telegram_id')}",
+            )
+        ])
 
     await target.answer(
-        text,
-        reply_markup=get_training_levels_keyboard(levels.data)
+        "👥 لیست کاربران\n\nبرای مدیریت، روی کاربر بزن:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
 
 
-async def send_training_level_steps(target, level_number: int):
-    level = (
-        supabase.table("training_levels")
+async def send_admin_user_detail(target, telegram_id: int):
+    user_result = (
+        supabase.table("app_users")
         .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
+        .eq("telegram_id", telegram_id)
         .limit(1)
         .execute()
     )
 
-    if not level.data:
-        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+    if not user_result.data:
+        await target.answer("❌ کاربر پیدا نشد.")
         return
 
-    level_item = level.data[0]
-
-    steps = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level_item.get("id"))
-        .eq("is_active", True)
-        .order("step_number")
-        .execute()
-    )
-
-    if not steps.data:
-        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
-        return
-
-    text = f"🎓 سطح {level_item.get('level_number')}: {level_item.get('title')}\n\n"
-    text += f"{level_item.get('description') or ''}\n\n"
-    text += "یکی از مرحله‌ها را انتخاب کن:"
-
-    await target.answer(
-        text,
-        reply_markup=get_training_steps_keyboard(level_number, steps.data)
-    )
-
-
-async def send_training_step_detail(target, level_number: int, step_number: int):
-    level = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not level.data:
-        await target.answer("❌ این سطح آموزشی پیدا نشد.")
-        return
-
-    step = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level.data[0].get("id"))
-        .eq("step_number", step_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not step.data:
-        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
-        return
-
-    item = step.data[0]
-
-    if item.get("image_url"):
-        await target.answer_photo(
-            photo=item.get("image_url"),
-            caption=f"🖼 عکس آموزش: {item.get('title')}"
-        )
-
-    if item.get("video_url"):
-        await target.answer_video(
-            video=item.get("video_url"),
-            caption=f"🎥 ویدئو آموزش: {item.get('title')}"
-        )
-
-    if item.get("pdf_url"):
-        await target.answer_document(
-            document=item.get("pdf_url"),
-            caption=f"📄 PDF آموزش: {item.get('title')}"
-        )
-
-    text = f"🎓 سطح {level_number} - مرحله {step_number}\n"
-    text += f"{item.get('title')}\n\n"
-    text += f"{item.get('content') or 'محتوای این آموزش بعداً تکمیل می‌شود.'}\n\n"
-    text += "بعد از مطالعه، روی دکمه شروع آزمون بزن."
-
-    await target.answer(
-        text,
-        reply_markup=get_training_step_detail_keyboard(
-            level_number,
-            step_number,
-            item.get("title")
-        )
-    )
-
-
-async def send_edit_training_levels(target):
-    levels = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("is_active", True)
-        .order("level_number")
-        .execute()
-    )
-
-    if not levels.data:
-        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
-        return
-
-    text = "✏️ ویرایش محتوای آموزش\n\n"
-    text += "اول سطح آموزشی را انتخاب کن:"
-
-    await target.answer(
-        text,
-        reply_markup=get_edit_training_levels_keyboard(levels.data)
-    )
-
-
-async def send_edit_training_level_steps(target, level_number: int):
-    level = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not level.data:
-        await target.answer("❌ این سطح آموزشی پیدا نشد.")
-        return
-
-    level_item = level.data[0]
-
-    steps = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level_item.get("id"))
-        .eq("is_active", True)
-        .order("step_number")
-        .execute()
-    )
-
-    if not steps.data:
-        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
-        return
-
-    text = f"✏️ ویرایش سطح {level_item.get('level_number')}: {level_item.get('title')}\n\n"
-    text += "حالا مرحله‌ای که می‌خواهی ویرایش کنی را انتخاب کن:"
-
-    await target.answer(
-        text,
-        reply_markup=get_edit_training_steps_keyboard(level_number, steps.data)
-    )
-
-
-async def prepare_edit_training_step(target, telegram_id: int, level_number: int, step_number: int):
-    level = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not level.data:
-        await target.answer("❌ این سطح آموزشی پیدا نشد.")
-        return
-
-    step = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level.data[0].get("id"))
-        .eq("step_number", step_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not step.data:
-        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
-        return
-
-    item = step.data[0]
-
-    WAITING_TRAINING_EDIT_INPUT[telegram_id] = {
-        "step_id": item.get("id"),
-        "level_number": level_number,
-        "step_number": step_number,
-        "title": item.get("title")
-    }
-
-    text = "✅ مرحله انتخاب شد.\n\n"
-    text += f"سطح {level_number} - مرحله {step_number}\n"
-    text += f"{item.get('title')}\n\n"
-    text += "محتوای فعلی:\n"
-    text += f"{item.get('content') or 'محتوایی ثبت نشده است.'}\n\n"
-    text += "متن جدید آموزش را همینجا بفرست.\n"
-    text += "هر متنی بفرستی جایگزین محتوای فعلی می‌شود."
-
-    await target.answer(text)
-
-
-async def send_training_media_levels(target, media_type: str):
-    media_label = get_training_media_label(media_type)
-
-    levels = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("is_active", True)
-        .order("level_number")
-        .execute()
-    )
-
-    if not levels.data:
-        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
-        return
-
-    text = f"➕ افزودن {media_label}\n\n"
-    text += "اول سطح آموزشی را انتخاب کن:"
-
-    await target.answer(
-        text,
-        reply_markup=get_training_media_levels_keyboard(levels.data, media_type)
-    )
-
-
-async def send_training_media_steps(target, media_type: str, level_number: int):
-    media_label = get_training_media_label(media_type)
-
-    level = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not level.data:
-        await target.answer("❌ این سطح آموزشی پیدا نشد.")
-        return
-
-    level_item = level.data[0]
-
-    steps = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level_item.get("id"))
-        .eq("is_active", True)
-        .order("step_number")
-        .execute()
-    )
-
-    if not steps.data:
-        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
-        return
-
-    text = f"➕ افزودن {media_label}\n\n"
-    text += f"سطح {level_number}: {level_item.get('title')}\n\n"
-    text += "حالا مرحله آموزشی را انتخاب کن:"
-
-    await target.answer(
-        text,
-        reply_markup=get_training_media_steps_keyboard(level_number, steps.data, media_type)
-    )
-
-
-async def prepare_training_media_step(target, telegram_id: int, media_type: str, level_number: int, step_number: int):
-    media_label = get_training_media_label(media_type)
-    column_name = get_training_media_column(media_type)
-
-    if not column_name:
-        await target.answer("❌ نوع فایل آموزشی درست نیست.")
-        return
-
-    level = (
-        supabase.table("training_levels")
-        .select("*")
-        .eq("level_number", level_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not level.data:
-        await target.answer("❌ این سطح آموزشی پیدا نشد.")
-        return
-
-    step = (
-        supabase.table("training_steps")
-        .select("*")
-        .eq("level_id", level.data[0].get("id"))
-        .eq("step_number", step_number)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
-
-    if not step.data:
-        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
-        return
-
-    item = step.data[0]
-
-    WAITING_TRAINING_MEDIA_FILE[telegram_id] = {
-        "step_id": item.get("id"),
-        "level_number": level_number,
-        "step_number": step_number,
-        "title": item.get("title"),
-        "media_type": media_type,
-        "media_label": media_label,
-        "column_name": column_name
-    }
-
-    await target.answer(
-        "✅ مرحله انتخاب شد.\n\n"
-        f"سطح {level_number} - مرحله {step_number}\n"
-        f"{item.get('title')}\n\n"
-        f"حالا {media_label} را بفرست."
-    )
-
-
-async def send_products_list(target):
+    user = user_result.data[0]
+    active_text = "فعال" if user.get("is_active") else "در انتظار تأیید"
+    username = f"@{user.get('username')}" if user.get("username") else "-"
+
+    text = "👤 مدیریت کاربر\n\n"
+    text += f"نام: {user.get('full_name')}\n"
+    text += f"یوزرنیم: {username}\n"
+    text += f"تلگرام آیدی: {user.get('telegram_id')}\n"
+    text += f"نقش: {get_role_label(user.get('role'))}\n"
+    text += f"وضعیت: {active_text}\n"
+
+    buttons = [
+        [InlineKeyboardButton(text="✅ تأیید کاربر", callback_data=f"approve_user:{telegram_id}")],
+        [InlineKeyboardButton(text="👤 نقش: مشتری", callback_data=f"set_user_role:{telegram_id}:approved_customer")],
+        [InlineKeyboardButton(text="✍️ نقش: ویراستار", callback_data=f"set_user_role:{telegram_id}:content_contributor")],
+        [InlineKeyboardButton(text="👑 نقش: ادمین", callback_data=f"set_user_role:{telegram_id}:admin")],
+        [InlineKeyboardButton(text="🔙 بازگشت به کاربران", callback_data="users_list")],
+    ]
+
+    await target.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+async def send_products_list(target, action: str = "view"):
     products = (
         supabase.table("products")
         .select("*")
@@ -869,12 +473,18 @@ async def send_products_list(target):
         await target.answer("هنوز محصولی ثبت نشده است.")
         return
 
-    text = "📦 لیست محصولات\n\n"
-    text += "برای دیدن اطلاعات کامل، روی محصول موردنظر بزن:"
+    titles = {
+        "view": "📦 لیست محصولات\n\nبرای دیدن اطلاعات کامل، روی محصول موردنظر بزن:",
+        "photo": "🖼 افزودن عکس محصول\n\nمحصول را انتخاب کن:",
+        "video": "🎥 افزودن ویدئو محصول\n\nمحصول را انتخاب کن:",
+        "catalog": "📄 افزودن کاتالوگ محصول\n\nمحصول را انتخاب کن:",
+        "faq": "❓ افزودن سوال محصول\n\nمحصول را انتخاب کن:",
+        "edit": "✏️ ویرایش محصول\n\nمحصول را انتخاب کن:",
+    }
 
     await target.answer(
-        text,
-        reply_markup=get_products_keyboard(products.data)
+        titles.get(action, "محصول را انتخاب کن:"),
+        reply_markup=get_products_keyboard(products.data, action),
     )
 
 
@@ -903,10 +513,7 @@ async def send_product_detail(target, code: str):
     )
 
     if photo.data:
-        await target.answer_photo(
-            photo=photo.data[0].get("file_url"),
-            caption=f"📦 {product.get('fa_name')}"
-        )
+        await target.answer_photo(photo=photo.data[0].get("file_url"), caption=f"📦 {product.get('fa_name')}")
 
     video = (
         supabase.table("product_media")
@@ -918,10 +525,7 @@ async def send_product_detail(target, code: str):
     )
 
     if video.data:
-        await target.answer_video(
-            video=video.data[0].get("file_url"),
-            caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}"
-        )
+        await target.answer_video(video=video.data[0].get("file_url"), caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}")
 
     catalog = (
         supabase.table("product_media")
@@ -933,10 +537,7 @@ async def send_product_detail(target, code: str):
     )
 
     if catalog.data:
-        await target.answer_document(
-            document=catalog.data[0].get("file_url"),
-            caption=f"📄 کاتالوگ {product.get('fa_name')}"
-        )
+        await target.answer_document(document=catalog.data[0].get("file_url"), caption=f"📄 کاتالوگ {product.get('fa_name')}")
 
     faqs = (
         supabase.table("product_faqs")
@@ -963,9 +564,301 @@ async def send_product_detail(target, code: str):
             text += f"سوال: {faq.get('question')}\n"
             text += f"پاسخ: {faq.get('answer')}\n\n"
 
+    await target.answer(text, reply_markup=get_product_detail_keyboard())
+
+
+async def get_level_by_number(level_number: int):
+    result = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+async def get_step_by_numbers(level_number: int, step_number: int):
+    level = await get_level_by_number(level_number)
+    if not level:
+        return None, None
+
+    step = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level.get("id"))
+        .eq("step_number", step_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not step.data:
+        return level, None
+
+    return level, step.data[0]
+
+
+async def send_training_levels(target):
+    levels = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("is_active", True)
+        .order("level_number")
+        .execute()
+    )
+
+    if not levels.data:
+        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
+        return
+
+    text = "🎓 مسیر آموزشی فوراور\n"
+    text += "از صفر تا نتورکر حرفه‌ای\n\n"
+    text += "برای شروع، یکی از سطح‌ها را انتخاب کن:"
+
+    await target.answer(text, reply_markup=get_training_levels_keyboard(levels.data))
+
+
+async def send_training_level_steps(target, level_number: int):
+    level = await get_level_by_number(level_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    steps = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level.get("id"))
+        .eq("is_active", True)
+        .order("step_number")
+        .execute()
+    )
+
+    if not steps.data:
+        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
+        return
+
+    text = f"🎓 سطح {level.get('level_number')}: {level.get('title')}\n\n"
+    text += f"{level.get('description') or ''}\n\n"
+    text += "یکی از مرحله‌ها را انتخاب کن:"
+
+    await target.answer(text, reply_markup=get_training_steps_keyboard(level_number, steps.data))
+
+
+async def send_training_step_detail(target, level_number: int, step_number: int):
+    level, item = await get_step_by_numbers(level_number, step_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    if not item:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    if item.get("image_url"):
+        await target.answer_photo(photo=item.get("image_url"), caption=f"🖼 عکس آموزش: {item.get('title')}")
+
+    if item.get("video_url"):
+        await target.answer_video(video=item.get("video_url"), caption=f"🎥 ویدئو آموزش: {item.get('title')}")
+
+    if item.get("pdf_url"):
+        await target.answer_document(document=item.get("pdf_url"), caption=f"📄 PDF آموزش: {item.get('title')}")
+
+    text = f"🎓 سطح {level_number} - مرحله {step_number}\n"
+    text += f"{item.get('title')}\n\n"
+    text += f"{item.get('content') or 'محتوای این آموزش بعداً تکمیل می‌شود.'}\n\n"
+    text += "بعد از مطالعه، روی دکمه شروع آزمون بزن."
+
+    await target.answer(text, reply_markup=get_training_step_detail_keyboard(level_number, step_number, item.get("title")))
+
+
+async def send_training_level_selection(target, mode: str, title: str):
+    levels = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("is_active", True)
+        .order("level_number")
+        .execute()
+    )
+
+    if not levels.data:
+        await target.answer("هنوز سطح آموزشی ثبت نشده است.")
+        return
+
+    await target.answer(
+        f"{title}\n\nاول سطح آموزشی را انتخاب کن:",
+        reply_markup=get_training_levels_keyboard(levels.data, f"{mode}_level"),
+    )
+
+
+async def send_training_step_selection(target, mode: str, level_number: int, title: str, back_callback: str):
+    level = await get_level_by_number(level_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    steps = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level.get("id"))
+        .eq("is_active", True)
+        .order("step_number")
+        .execute()
+    )
+
+    if not steps.data:
+        await target.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
+        return
+
+    text = f"{title}\n\n"
+    text += f"سطح {level_number}: {level.get('title')}\n\n"
+    text += "حالا مرحله را انتخاب کن:"
+
     await target.answer(
         text,
-        reply_markup=get_product_detail_keyboard()
+        reply_markup=get_training_steps_keyboard(level_number, steps.data, f"{mode}_step", back_callback),
+    )
+
+
+async def prepare_edit_training_content(target, telegram_id: int, level_number: int, step_number: int):
+    level, item = await get_step_by_numbers(level_number, step_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    if not item:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    set_state(telegram_id, "training_edit_content", {
+        "step_id": item.get("id"),
+        "level_number": level_number,
+        "step_number": step_number,
+        "title": item.get("title"),
+    })
+
+    text = "✅ مرحله انتخاب شد.\n\n"
+    text += f"سطح {level_number} - مرحله {step_number}\n"
+    text += f"{item.get('title')}\n\n"
+    text += "محتوای فعلی:\n"
+    text += f"{item.get('content') or 'محتوایی ثبت نشده است.'}\n\n"
+    text += "متن جدید آموزش را همینجا بفرست."
+
+    await target.answer(text)
+
+
+async def prepare_edit_training_title(target, telegram_id: int, level_number: int, step_number: int):
+    level, item = await get_step_by_numbers(level_number, step_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    if not item:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    set_state(telegram_id, "training_edit_title", {
+        "step_id": item.get("id"),
+        "level_number": level_number,
+        "step_number": step_number,
+        "old_title": item.get("title"),
+    })
+
+    await target.answer(
+        "✅ مرحله انتخاب شد.\n\n"
+        f"عنوان فعلی: {item.get('title')}\n\n"
+        "عنوان جدید مرحله را بفرست."
+    )
+
+
+async def prepare_training_media_file(target, telegram_id: int, media_type: str, level_number: int, step_number: int):
+    media_label = get_training_media_label(media_type)
+    column_name = get_training_media_column(media_type)
+
+    if not column_name:
+        await target.answer("❌ نوع فایل آموزشی درست نیست.")
+        return
+
+    level, item = await get_step_by_numbers(level_number, step_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    if not item:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    set_state(telegram_id, "training_media_file", {
+        "step_id": item.get("id"),
+        "level_number": level_number,
+        "step_number": step_number,
+        "title": item.get("title"),
+        "media_type": media_type,
+        "media_label": media_label,
+        "column_name": column_name,
+    })
+
+    await target.answer(
+        "✅ مرحله انتخاب شد.\n\n"
+        f"سطح {level_number} - مرحله {step_number}\n"
+        f"{item.get('title')}\n\n"
+        f"حالا {media_label} را بفرست."
+    )
+
+
+async def delete_training_media(target, media_type: str, level_number: int, step_number: int):
+    media_label = get_training_media_label(media_type)
+    column_name = get_training_media_column(media_type)
+
+    if not column_name:
+        await target.answer("❌ نوع فایل آموزشی درست نیست.")
+        return
+
+    level, item = await get_step_by_numbers(level_number, step_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    if not item:
+        await target.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    supabase.table("training_steps").update({column_name: None}).eq("id", item.get("id")).execute()
+
+    await target.answer(
+        f"✅ {media_label} برای این مرحله غیرفعال شد.\n\n"
+        f"سطح {level_number} - مرحله {step_number}\n"
+        f"{item.get('title')}"
+    )
+
+
+async def prepare_edit_level_description(target, telegram_id: int, level_number: int):
+    level = await get_level_by_number(level_number)
+
+    if not level:
+        await target.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    set_state(telegram_id, "training_edit_level_description", {
+        "level_id": level.get("id"),
+        "level_number": level_number,
+        "title": level.get("title"),
+    })
+
+    await target.answer(
+        "✅ سطح انتخاب شد.\n\n"
+        f"سطح {level_number}: {level.get('title')}\n\n"
+        "توضیح فعلی:\n"
+        f"{level.get('description') or 'توضیحی ثبت نشده است.'}\n\n"
+        "توضیح جدید سطح را بفرست."
     )
 
 
@@ -973,7 +866,7 @@ async def send_product_detail(target, code: str):
 async def start_handler(message: Message):
     user = register_user(message)
 
-    if not user["is_active"]:
+    if not user.get("is_active"):
         await message.answer(
             "سلام 👋\n"
             "ثبت‌نام شما انجام شد.\n\n"
@@ -984,7 +877,7 @@ async def start_handler(message: Message):
     await message.answer(
         "سلام 👋\n"
         "به سیستم آموزشی فوراور خوش آمدید ✅",
-        reply_markup=get_menu(user["role"])
+        reply_markup=get_menu(user.get("role")),
     )
 
 
@@ -993,14 +886,11 @@ async def back_to_main_menu_handler(message: Message):
     user = get_current_user(message.from_user.id)
     clear_waiting_states(message.from_user.id)
 
-    if not user or not user["is_active"]:
+    if not user or not user.get("is_active"):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
 
-    await message.answer(
-        "منوی اصلی:",
-        reply_markup=get_menu(user["role"])
-    )
+    await message.answer("منوی اصلی:", reply_markup=get_menu(user.get("role")))
 
 
 @dp.message(F.text == "👥 مدیریت کاربران")
@@ -1009,70 +899,105 @@ async def manage_users_handler(message: Message):
         await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
-    users = (
-        supabase.table("app_users")
-        .select("*")
-        .order("created_at", desc=True)
-        .limit(20)
-        .execute()
-    )
+    await message.answer("👥 مدیریت کاربران", reply_markup=get_users_menu())
 
-    if not users.data:
-        await message.answer("هیچ کاربری ثبت نشده است.")
+
+@dp.message(F.text == "📋 لیست کاربران")
+async def users_list_message_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
-    text = "👥 لیست کاربران:\n\n"
+    await send_users_list(message)
 
-    for item in users.data:
-        active_text = "فعال" if item.get("is_active") else "در انتظار تأیید"
 
-        text += f"نام: {item.get('full_name')}\n"
-        text += f"یوزرنیم: @{item.get('username')}\n"
-        text += f"تلگرام آیدی: {item.get('telegram_id')}\n"
-        text += f"نقش: {item.get('role')}\n"
-        text += f"وضعیت: {active_text}\n"
-        text += f"تأیید: /approve {item.get('telegram_id')}\n"
-        text += f"تغییر نقش: /setrole {item.get('telegram_id')} content_contributor\n"
-        text += "------------------\n"
+@dp.callback_query(F.data == "users_list")
+async def users_list_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ادمین ندارید.", show_alert=True)
+        return
 
-    await message.answer(text)
+    await callback.answer()
+    await send_users_list(callback.message)
+
+
+@dp.callback_query(F.data.startswith("admin_user:"))
+async def admin_user_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+
+    telegram_id_text = callback.data.split(":")[1]
+    if not telegram_id_text.isdigit():
+        await callback.answer("آیدی درست نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_admin_user_detail(callback.message, int(telegram_id_text))
+
+
+@dp.callback_query(F.data.startswith("approve_user:"))
+async def approve_user_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+
+    telegram_id = int(callback.data.split(":")[1])
+    supabase.table("app_users").update({"is_active": True}).eq("telegram_id", telegram_id).execute()
+
+    await callback.answer("✅ کاربر تأیید شد.", show_alert=True)
+    await send_admin_user_detail(callback.message, telegram_id)
+
+
+@dp.callback_query(F.data.startswith("set_user_role:"))
+async def set_user_role_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("اطلاعات درست نیست.", show_alert=True)
+        return
+
+    telegram_id = int(parts[1])
+    new_role = parts[2]
+
+    if new_role not in VALID_ROLES:
+        await callback.answer("نقش درست نیست.", show_alert=True)
+        return
+
+    supabase.table("app_users").update({
+        "role": new_role,
+        "is_active": True,
+    }).eq("telegram_id", telegram_id).execute()
+
+    await callback.answer("✅ نقش کاربر تغییر کرد.", show_alert=True)
+    await send_admin_user_detail(callback.message, telegram_id)
 
 
 @dp.message(F.text.startswith("/approve "))
-async def approve_user_handler(message: Message):
+async def approve_user_command_handler(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
     telegram_id_text = message.text.replace("/approve ", "").strip()
-
     if not telegram_id_text.isdigit():
         await message.answer("❌ آیدی تلگرام درست نیست.")
         return
 
-    telegram_id = int(telegram_id_text)
-
-    result = (
-        supabase.table("app_users")
-        .update({"is_active": True})
-        .eq("telegram_id", telegram_id)
-        .execute()
-    )
-
-    if result.data:
-        await message.answer("✅ کاربر تأیید شد.")
-    else:
-        await message.answer("❌ کاربری با این آیدی پیدا نشد.")
+    supabase.table("app_users").update({"is_active": True}).eq("telegram_id", int(telegram_id_text)).execute()
+    await message.answer("✅ کاربر تأیید شد.")
 
 
 @dp.message(F.text.startswith("/setrole "))
-async def set_role_handler(message: Message):
+async def set_role_command_handler(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ شما دسترسی ادمین ندارید.")
         return
 
     parts = message.text.split()
-
     if len(parts) != 3:
         await message.answer("❌ دستور درست نیست.")
         return
@@ -1080,27 +1005,12 @@ async def set_role_handler(message: Message):
     telegram_id_text = parts[1]
     new_role = parts[2]
 
-    if not telegram_id_text.isdigit():
-        await message.answer("❌ آیدی تلگرام درست نیست.")
+    if not telegram_id_text.isdigit() or new_role not in VALID_ROLES:
+        await message.answer("❌ آیدی یا نقش درست نیست.")
         return
 
-    if new_role not in VALID_ROLES:
-        await message.answer("❌ نقش درست نیست.")
-        return
-
-    telegram_id = int(telegram_id_text)
-
-    result = (
-        supabase.table("app_users")
-        .update({"role": new_role, "is_active": True})
-        .eq("telegram_id", telegram_id)
-        .execute()
-    )
-
-    if result.data:
-        await message.answer("✅ نقش کاربر تغییر کرد.")
-    else:
-        await message.answer("❌ کاربری با این آیدی پیدا نشد.")
+    supabase.table("app_users").update({"role": new_role, "is_active": True}).eq("telegram_id", int(telegram_id_text)).execute()
+    await message.answer("✅ نقش کاربر تغییر کرد.")
 
 
 @dp.message(F.text == "📦 مدیریت محصولات")
@@ -1109,10 +1019,7 @@ async def manage_products_handler(message: Message):
         await message.answer("⛔ شما دسترسی مدیریت محصولات ندارید.")
         return
 
-    await message.answer(
-        "📦 مدیریت محصولات",
-        reply_markup=get_products_menu()
-    )
+    await message.answer("📦 مدیریت محصولات", reply_markup=get_products_menu())
 
 
 @dp.message(F.text == "🛡 مدیریت ابجکشن‌ها")
@@ -1121,10 +1028,7 @@ async def manage_objections_handler(message: Message):
         await message.answer("⛔ شما دسترسی مدیریت ابجکشن‌ها ندارید.")
         return
 
-    await message.answer(
-        "🛡 مدیریت ابجکشن‌ها",
-        reply_markup=get_objections_menu()
-    )
+    await message.answer("🛡 مدیریت ابجکشن‌ها", reply_markup=get_objections_menu())
 
 
 @dp.message(F.text == "🎓 مدیریت آموزش‌ها")
@@ -1133,296 +1037,7 @@ async def manage_trainings_handler(message: Message):
         await message.answer("⛔ شما دسترسی مدیریت آموزش‌ها ندارید.")
         return
 
-    await message.answer(
-        "🎓 مدیریت آموزش‌ها",
-        reply_markup=get_trainings_menu()
-    )
-
-
-@dp.message(F.text == "✏️ ویرایش محتوای آموزش")
-async def edit_training_content_handler(message: Message):
-    if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.")
-        return
-
-    clear_waiting_states(message.from_user.id)
-    await send_edit_training_levels(message)
-
-
-@dp.message(F.text == "📄 افزودن PDF آموزش")
-async def add_training_pdf_handler(message: Message):
-    if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی افزودن PDF آموزش ندارید.")
-        return
-
-    clear_waiting_states(message.from_user.id)
-    await send_training_media_levels(message, "pdf")
-
-
-@dp.message(F.text == "🎥 افزودن ویدئو آموزش")
-async def add_training_video_handler(message: Message):
-    if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی افزودن ویدئو آموزش ندارید.")
-        return
-
-    clear_waiting_states(message.from_user.id)
-    await send_training_media_levels(message, "video")
-
-
-@dp.message(F.text == "🖼 افزودن عکس آموزش")
-async def add_training_photo_handler(message: Message):
-    if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی افزودن عکس آموزش ندارید.")
-        return
-
-    clear_waiting_states(message.from_user.id)
-    await send_training_media_levels(message, "photo")
-
-
-@dp.callback_query(F.data.startswith("media_levels:"))
-async def training_media_levels_callback(callback: CallbackQuery):
-    if not can_manage_content(callback.from_user.id):
-        await callback.answer("⛔ شما دسترسی افزودن فایل آموزش ندارید.", show_alert=True)
-        return
-
-    media_type = callback.data.split(":")[1]
-
-    await callback.answer()
-    await send_training_media_levels(callback.message, media_type)
-
-
-@dp.callback_query(F.data.startswith("media_level:"))
-async def training_media_level_callback(callback: CallbackQuery):
-    if not can_manage_content(callback.from_user.id):
-        await callback.answer("⛔ شما دسترسی افزودن فایل آموزش ندارید.", show_alert=True)
-        return
-
-    parts = callback.data.split(":")
-
-    if len(parts) != 3:
-        await callback.answer("اطلاعات سطح درست نیست.", show_alert=True)
-        return
-
-    media_type = parts[1]
-    level_text = parts[2]
-
-    if not level_text.isdigit():
-        await callback.answer("شماره سطح درست نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await send_training_media_steps(callback.message, media_type, int(level_text))
-
-
-@dp.callback_query(F.data.startswith("media_step:"))
-async def training_media_step_callback(callback: CallbackQuery):
-    if not can_manage_content(callback.from_user.id):
-        await callback.answer("⛔ شما دسترسی افزودن فایل آموزش ندارید.", show_alert=True)
-        return
-
-    parts = callback.data.split(":")
-
-    if len(parts) != 4:
-        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
-        return
-
-    media_type = parts[1]
-    level_text = parts[2]
-    step_text = parts[3]
-
-    if not level_text.isdigit() or not step_text.isdigit():
-        await callback.answer("شماره سطح و مرحله درست نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await prepare_training_media_step(
-        callback.message,
-        callback.from_user.id,
-        media_type,
-        int(level_text),
-        int(step_text)
-    )
-
-
-@dp.callback_query(F.data == "edit_training_levels")
-async def edit_training_levels_callback(callback: CallbackQuery):
-    if not can_manage_content(callback.from_user.id):
-        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
-        return
-
-    await callback.answer()
-    await send_edit_training_levels(callback.message)
-
-
-@dp.callback_query(F.data.startswith("edit_training_level:"))
-async def edit_training_level_callback(callback: CallbackQuery):
-    if not can_manage_content(callback.from_user.id):
-        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
-        return
-
-    level_text = callback.data.split(":")[1]
-
-    if not level_text.isdigit():
-        await callback.answer("شماره سطح درست نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await send_edit_training_level_steps(callback.message, int(level_text))
-
-
-@dp.callback_query(F.data.startswith("edit_training_step:"))
-async def edit_training_step_callback(callback: CallbackQuery):
-    if not can_manage_content(callback.from_user.id):
-        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
-        return
-
-    parts = callback.data.split(":")
-
-    if len(parts) != 3:
-        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
-        return
-
-    level_text = parts[1]
-    step_text = parts[2]
-
-    if not level_text.isdigit() or not step_text.isdigit():
-        await callback.answer("شماره سطح و مرحله درست نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await prepare_edit_training_step(
-        callback.message,
-        callback.from_user.id,
-        int(level_text),
-        int(step_text)
-    )
-
-
-@dp.message(F.text == "🎓 آموزش‌ها")
-async def training_levels_handler(message: Message):
-    if not can_view_content(message.from_user.id):
-        await message.answer("⛔ حساب شما هنوز فعال نیست.")
-        return
-
-    await send_training_levels(message)
-
-
-@dp.callback_query(F.data == "training_levels")
-async def training_levels_callback(callback: CallbackQuery):
-    if not can_view_content(callback.from_user.id):
-        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await send_training_levels(callback.message)
-
-
-@dp.callback_query(F.data.startswith("training_level:"))
-async def training_level_callback(callback: CallbackQuery):
-    if not can_view_content(callback.from_user.id):
-        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
-        return
-
-    level_text = callback.data.split(":")[1]
-
-    if not level_text.isdigit():
-        await callback.answer("شماره سطح درست نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await send_training_level_steps(callback.message, int(level_text))
-
-
-@dp.callback_query(F.data.startswith("training_step:"))
-async def training_step_callback(callback: CallbackQuery):
-    if not can_view_content(callback.from_user.id):
-        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
-        return
-
-    parts = callback.data.split(":")
-
-    if len(parts) != 3:
-        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
-        return
-
-    level_text = parts[1]
-    step_text = parts[2]
-
-    if not level_text.isdigit() or not step_text.isdigit():
-        await callback.answer("شماره سطح و مرحله درست نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await send_training_step_detail(
-        callback.message,
-        int(level_text),
-        int(step_text)
-    )
-
-
-@dp.callback_query(F.data.startswith("training_quiz:"))
-async def training_quiz_callback(callback: CallbackQuery):
-    await callback.answer()
-    await callback.message.answer(
-        "📝 آزمون ۴ گزینه‌ای این مرحله در قدم بعدی اضافه می‌شود."
-    )
-
-
-@dp.callback_query(F.data == "show_objections")
-async def show_objections_callback(callback: CallbackQuery):
-    if not can_view_content(callback.from_user.id):
-        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await callback.message.answer(build_objections_text())
-
-
-@dp.callback_query(F.data == "products_list")
-async def products_list_callback(callback: CallbackQuery):
-    if not can_view_content(callback.from_user.id):
-        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
-        return
-
-    await callback.answer()
-    await send_products_list(callback.message)
-
-
-@dp.callback_query(F.data.startswith("product:"))
-async def product_detail_callback(callback: CallbackQuery):
-    if not can_view_content(callback.from_user.id):
-        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
-        return
-
-    code = callback.data.replace("product:", "").strip()
-
-    await callback.answer()
-    await send_product_detail(callback.message, code)
-
-
-@dp.message(F.text == "➕ افزودن پاسخ ابجکشن")
-async def add_objection_handler(message: Message):
-    if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ثبت ابجکشن ندارید.")
-        return
-
-    clear_waiting_states(message.from_user.id)
-    WAITING_OBJECTION_INPUT[message.from_user.id] = True
-
-    await message.answer(
-        "ابجکشن و پاسخ را با همین قالب بفرست:\n\n"
-        "ابجکشن: \n"
-        "پاسخ: "
-    )
-
-
-@dp.message(F.text == "🛡 پاسخ به ابجکشن‌ها")
-async def objections_list_handler(message: Message):
-    if not can_view_content(message.from_user.id):
-        await message.answer("⛔ حساب شما هنوز فعال نیست.")
-        return
-
-    await message.answer(build_objections_text())
+    await message.answer("🎓 مدیریت آموزش‌ها", reply_markup=get_trainings_menu())
 
 
 @dp.message(F.text == "➕ افزودن محصول")
@@ -1432,7 +1047,7 @@ async def add_product_handler(message: Message):
         return
 
     clear_waiting_states(message.from_user.id)
-    WAITING_PRODUCT_INPUT[message.from_user.id] = True
+    set_state(message.from_user.id, "product_add")
 
     await message.answer(
         "اطلاعات محصول را با همین قالب پر کن و بفرست:\n\n"
@@ -1454,11 +1069,8 @@ async def add_product_photo_handler(message: Message):
     if not can_manage_content(message.from_user.id):
         await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
         return
-
     clear_waiting_states(message.from_user.id)
-    WAITING_PHOTO_CODE[message.from_user.id] = True
-
-    await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
+    await send_products_list(message, "photo")
 
 
 @dp.message(F.text == "🎥 افزودن ویدئو محصول")
@@ -1466,11 +1078,8 @@ async def add_product_video_handler(message: Message):
     if not can_manage_content(message.from_user.id):
         await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
         return
-
     clear_waiting_states(message.from_user.id)
-    WAITING_VIDEO_CODE[message.from_user.id] = True
-
-    await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
+    await send_products_list(message, "video")
 
 
 @dp.message(F.text == "📄 افزودن کاتالوگ محصول")
@@ -1478,11 +1087,8 @@ async def add_product_catalog_handler(message: Message):
     if not can_manage_content(message.from_user.id):
         await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
         return
-
     clear_waiting_states(message.from_user.id)
-    WAITING_CATALOG_CODE[message.from_user.id] = True
-
-    await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
+    await send_products_list(message, "catalog")
 
 
 @dp.message(F.text == "❓ افزودن سوال محصول")
@@ -1490,11 +1096,8 @@ async def add_product_faq_handler(message: Message):
     if not can_manage_content(message.from_user.id):
         await message.answer("⛔ شما دسترسی ثبت سوال ندارید.")
         return
-
     clear_waiting_states(message.from_user.id)
-    WAITING_FAQ_CODE[message.from_user.id] = True
-
-    await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
+    await send_products_list(message, "faq")
 
 
 @dp.message(F.text == "✏️ ویرایش محصول")
@@ -1502,11 +1105,8 @@ async def edit_product_handler(message: Message):
     if not can_manage_content(message.from_user.id):
         await message.answer("⛔ شما دسترسی ویرایش محصول ندارید.")
         return
-
     clear_waiting_states(message.from_user.id)
-    WAITING_EDIT_CODE[message.from_user.id] = True
-
-    await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
+    await send_products_list(message, "edit")
 
 
 @dp.message(F.text == "📦 محصولات")
@@ -1514,175 +1114,703 @@ async def products_list_handler(message: Message):
     if not can_view_content(message.from_user.id):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
+    await send_products_list(message, "view")
 
-    await send_products_list(message)
+
+@dp.callback_query(F.data == "products_list")
+async def products_list_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await send_products_list(callback.message, "view")
+
+
+@dp.callback_query(F.data.startswith("product_action:"))
+async def product_action_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("اطلاعات محصول درست نیست.", show_alert=True)
+        return
+
+    action = parts[1]
+    code = parts[2]
+
+    if action == "view":
+        if not can_view_content(callback.from_user.id):
+            await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+            return
+        await callback.answer()
+        await send_product_detail(callback.message, code)
+        return
+
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی مدیریت محصولات ندارید.", show_alert=True)
+        return
+
+    product = (
+        supabase.table("products")
+        .select("*")
+        .eq("code", code)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not product.data:
+        await callback.answer("❌ محصول پیدا نشد.", show_alert=True)
+        return
+
+    item = product.data[0]
+    clear_waiting_states(callback.from_user.id)
+    await callback.answer()
+
+    if action in ["photo", "video", "catalog"]:
+        media_labels = {
+            "photo": "عکس محصول",
+            "video": "ویدئوی محصول",
+            "catalog": "کاتالوگ محصول",
+        }
+        set_state(callback.from_user.id, "product_media", {
+            "product_id": item.get("id"),
+            "product_name": item.get("fa_name"),
+            "media_type": action,
+            "media_label": media_labels[action],
+        })
+        await callback.message.answer(
+            f"✅ محصول انتخاب شد: {item.get('fa_name')}\n\n"
+            f"حالا {media_labels[action]} را بفرست."
+        )
+        return
+
+    if action == "faq":
+        set_state(callback.from_user.id, "product_faq", {
+            "product_id": item.get("id"),
+            "product_name": item.get("fa_name"),
+        })
+        await callback.message.answer(
+            f"✅ محصول انتخاب شد: {item.get('fa_name')}\n\n"
+            "حالا سوال و پاسخ را با این قالب بفرست:\n\n"
+            "سوال: \n"
+            "پاسخ: "
+        )
+        return
+
+    if action == "edit":
+        set_state(callback.from_user.id, "product_edit", {
+            "product_id": item.get("id"),
+            "product_name": item.get("fa_name"),
+        })
+        await callback.message.answer(
+            "اطلاعات فعلی محصول این است.\n"
+            "هر چیزی را می‌خواهی تغییر بده و همین متن کامل را دوباره بفرست:\n\n"
+            f"{product_template(item)}"
+        )
+        return
+
+
+@dp.callback_query(F.data.startswith("product:"))
+async def old_product_detail_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+    code = callback.data.replace("product:", "").strip()
+    await callback.answer()
+    await send_product_detail(callback.message, code)
 
 
 @dp.message(F.text.startswith("/product "))
-async def product_detail_handler(message: Message):
+async def product_detail_command_handler(message: Message):
     if not can_view_content(message.from_user.id):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
-
     code = message.text.replace("/product ", "").strip()
     await send_product_detail(message, code)
 
 
-@dp.message(F.photo)
-async def product_photo_file_handler(message: Message):
-    if WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id):
-        media_data = WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id)
+@dp.message(F.text == "➕ افزودن پاسخ ابجکشن")
+async def add_objection_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ثبت ابجکشن ندارید.")
+        return
 
-        if media_data["media_type"] != "photo":
-            await message.answer("❌ لطفاً فایل درست را بفرست.")
+    clear_waiting_states(message.from_user.id)
+    set_state(message.from_user.id, "objection_add")
+
+    await message.answer(
+        "ابجکشن و پاسخ را با همین قالب بفرست:\n\n"
+        "ابجکشن: \n"
+        "پاسخ: "
+    )
+
+
+@dp.message(F.text == "🛡 پاسخ به ابجکشن‌ها")
+async def objections_list_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+    await message.answer(build_objections_text())
+
+
+@dp.callback_query(F.data == "show_objections")
+async def show_objections_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.answer(build_objections_text())
+
+
+@dp.message(F.text == "🎓 آموزش‌ها")
+async def training_levels_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+    await send_training_levels(message)
+
+
+@dp.callback_query(F.data == "training_levels")
+async def training_levels_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_levels(callback.message)
+
+
+@dp.callback_query(F.data.startswith("training_level:"))
+async def training_level_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+
+    level_text = callback.data.split(":")[1]
+    if not level_text.isdigit():
+        await callback.answer("شماره سطح درست نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_training_level_steps(callback.message, int(level_text))
+
+
+@dp.callback_query(F.data.startswith("training_step:"))
+async def training_step_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_training_step_detail(callback.message, int(parts[1]), int(parts[2]))
+
+
+@dp.callback_query(F.data.startswith("training_quiz:"))
+async def training_quiz_callback(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("📝 آزمون ۴ گزینه‌ای این مرحله در قدم بعدی اضافه می‌شود.")
+
+
+@dp.message(F.text == "✏️ ویرایش محتوای آموزش")
+async def edit_training_content_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_training_level_selection(message, "edit_content", "✏️ ویرایش محتوای آموزش")
+
+
+@dp.callback_query(F.data == "edit_content_levels")
+async def edit_content_levels_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_level_selection(callback.message, "edit_content", "✏️ ویرایش محتوای آموزش")
+
+
+@dp.callback_query(F.data.startswith("edit_content_level:"))
+async def edit_content_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    if not level_text.isdigit():
+        await callback.answer("شماره سطح درست نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_step_selection(callback.message, "edit_content", int(level_text), "✏️ ویرایش محتوای آموزش", "edit_content_levels")
+
+
+@dp.callback_query(F.data.startswith("edit_content_step:"))
+async def edit_content_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await prepare_edit_training_content(callback.message, callback.from_user.id, int(parts[1]), int(parts[2]))
+
+
+@dp.message(F.text == "✏️ ویرایش عنوان مرحله")
+async def edit_training_title_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_training_level_selection(message, "edit_title", "✏️ ویرایش عنوان مرحله")
+
+
+@dp.callback_query(F.data == "edit_title_levels")
+async def edit_title_levels_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_level_selection(callback.message, "edit_title", "✏️ ویرایش عنوان مرحله")
+
+
+@dp.callback_query(F.data.startswith("edit_title_level:"))
+async def edit_title_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    if not level_text.isdigit():
+        await callback.answer("شماره سطح درست نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_step_selection(callback.message, "edit_title", int(level_text), "✏️ ویرایش عنوان مرحله", "edit_title_levels")
+
+
+@dp.callback_query(F.data.startswith("edit_title_step:"))
+async def edit_title_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+        await callback.answer("اطلاعات مرحله درست نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await prepare_edit_training_title(callback.message, callback.from_user.id, int(parts[1]), int(parts[2]))
+
+
+@dp.message(F.text == "✏️ ویرایش توضیح سطح")
+async def edit_level_description_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_training_level_selection(message, "edit_level_desc", "✏️ ویرایش توضیح سطح")
+
+
+@dp.callback_query(F.data.startswith("edit_level_desc_level:"))
+async def edit_level_desc_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی ویرایش آموزش‌ها ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    if not level_text.isdigit():
+        await callback.answer("شماره سطح درست نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await prepare_edit_level_description(callback.message, callback.from_user.id, int(level_text))
+
+
+@dp.message(F.text == "📄 افزودن PDF آموزش")
+async def add_training_pdf_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی افزودن PDF آموزش ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_training_level_selection(message, "add_media_pdf", "📄 افزودن PDF آموزش")
+
+
+@dp.message(F.text == "🎥 افزودن ویدئو آموزش")
+async def add_training_video_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی افزودن ویدئو آموزش ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_training_level_selection(message, "add_media_video", "🎥 افزودن ویدئو آموزش")
+
+
+@dp.message(F.text == "🖼 افزودن عکس آموزش")
+async def add_training_photo_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی افزودن عکس آموزش ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_training_level_selection(message, "add_media_photo", "🖼 افزودن عکس آموزش")
+
+
+@dp.callback_query(F.data.startswith("add_media_pdf_level:"))
+async def add_media_pdf_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "add_media_pdf", int(level_text), "📄 افزودن PDF آموزش", "add_media_pdf_levels")
+
+
+@dp.callback_query(F.data.startswith("add_media_video_level:"))
+async def add_media_video_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "add_media_video", int(level_text), "🎥 افزودن ویدئو آموزش", "add_media_video_levels")
+
+
+@dp.callback_query(F.data.startswith("add_media_photo_level:"))
+async def add_media_photo_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "add_media_photo", int(level_text), "🖼 افزودن عکس آموزش", "add_media_photo_levels")
+
+
+@dp.callback_query(F.data == "add_media_pdf_levels")
+async def add_media_pdf_levels_back(callback: CallbackQuery):
+    await callback.answer()
+    await send_training_level_selection(callback.message, "add_media_pdf", "📄 افزودن PDF آموزش")
+
+
+@dp.callback_query(F.data == "add_media_video_levels")
+async def add_media_video_levels_back(callback: CallbackQuery):
+    await callback.answer()
+    await send_training_level_selection(callback.message, "add_media_video", "🎥 افزودن ویدئو آموزش")
+
+
+@dp.callback_query(F.data == "add_media_photo_levels")
+async def add_media_photo_levels_back(callback: CallbackQuery):
+    await callback.answer()
+    await send_training_level_selection(callback.message, "add_media_photo", "🖼 افزودن عکس آموزش")
+
+
+@dp.callback_query(F.data.startswith("add_media_pdf_step:"))
+async def add_media_pdf_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    await callback.answer()
+    await prepare_training_media_file(callback.message, callback.from_user.id, "pdf", int(parts[1]), int(parts[2]))
+
+
+@dp.callback_query(F.data.startswith("add_media_video_step:"))
+async def add_media_video_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    await callback.answer()
+    await prepare_training_media_file(callback.message, callback.from_user.id, "video", int(parts[1]), int(parts[2]))
+
+
+@dp.callback_query(F.data.startswith("add_media_photo_step:"))
+async def add_media_photo_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    await callback.answer()
+    await prepare_training_media_file(callback.message, callback.from_user.id, "photo", int(parts[1]), int(parts[2]))
+
+
+@dp.message(F.text == "🗑 حذف/غیرفعال کردن فایل آموزش")
+async def delete_training_media_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی حذف فایل آموزش ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await message.answer(
+        "🗑 حذف/غیرفعال کردن فایل آموزش\n\n"
+        "کدام نوع فایل را می‌خواهی غیرفعال کنی؟",
+        reply_markup=get_training_media_type_keyboard("delete_media_type"),
+    )
+
+
+@dp.callback_query(F.data.startswith("delete_media_type:"))
+async def delete_media_type_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    media_type = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_level_selection(callback.message, f"delete_media_{media_type}", f"🗑 حذف {get_training_media_label(media_type)}")
+
+
+@dp.callback_query(F.data.startswith("delete_media_pdf_level:"))
+async def delete_media_pdf_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "delete_media_pdf", int(level_text), "🗑 حذف PDF آموزش", "delete_media_pdf_levels")
+
+
+@dp.callback_query(F.data.startswith("delete_media_video_level:"))
+async def delete_media_video_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "delete_media_video", int(level_text), "🗑 حذف ویدئو آموزش", "delete_media_video_levels")
+
+
+@dp.callback_query(F.data.startswith("delete_media_photo_level:"))
+async def delete_media_photo_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "delete_media_photo", int(level_text), "🗑 حذف عکس آموزش", "delete_media_photo_levels")
+
+
+@dp.callback_query(F.data.startswith("delete_media_pdf_step:"))
+async def delete_media_pdf_step_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await delete_training_media(callback.message, "pdf", int(parts[1]), int(parts[2]))
+
+
+@dp.callback_query(F.data.startswith("delete_media_video_step:"))
+async def delete_media_video_step_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await delete_training_media(callback.message, "video", int(parts[1]), int(parts[2]))
+
+
+@dp.callback_query(F.data.startswith("delete_media_photo_step:"))
+async def delete_media_photo_step_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await delete_training_media(callback.message, "photo", int(parts[1]), int(parts[2]))
+
+
+@dp.message(F.text == "❓ سوالات بی‌جواب")
+async def unanswered_questions_handler(message: Message):
+    await message.answer("❓ بخش سوالات بی‌جواب در قدم بعدی دکمه‌ای و کامل می‌شود.")
+
+
+@dp.message(F.text == "❓ سوالات پرتکرار")
+async def common_questions_handler(message: Message):
+    await message.answer("❓ سوالات پرتکرار فعلاً از داخل هر محصول نمایش داده می‌شود.")
+
+
+@dp.message(F.text == "📝 افزودن محتوا")
+async def add_content_handler(message: Message):
+    await message.answer("برای افزودن محتوا از بخش‌های مدیریت محصولات، ابجکشن‌ها و آموزش‌ها استفاده کن.")
+
+
+@dp.message(F.photo)
+async def photo_file_handler(message: Message):
+    state = get_state(message.from_user.id)
+
+    if not state:
+        return
+
+    if state.get("type") == "training_media_file":
+        if state.get("media_type") != "photo":
+            await message.answer("❌ لطفاً عکس آموزش را ارسال کن.")
             return
 
         photo_file_id = message.photo[-1].file_id
-
-        supabase.table("training_steps").update({
-            media_data["column_name"]: photo_file_id
-        }).eq("id", media_data["step_id"]).execute()
-
+        supabase.table("training_steps").update({state["column_name"]: photo_file_id}).eq("id", state["step_id"]).execute()
         clear_waiting_states(message.from_user.id)
 
         await message.answer(
             "✅ عکس آموزش با موفقیت ثبت شد.\n\n"
-            f"سطح {media_data['level_number']} - مرحله {media_data['step_number']}\n"
-            f"{media_data['title']}"
+            f"سطح {state['level_number']} - مرحله {state['step_number']}\n"
+            f"{state['title']}"
         )
         return
 
-    if not WAITING_PHOTO_FILE.get(message.from_user.id):
-        return
-
-    product_id = WAITING_PHOTO_FILE.get(message.from_user.id)
-    photo_file_id = message.photo[-1].file_id
-
-    supabase.table("product_media").insert({
-        "product_id": product_id,
-        "media_type": "photo",
-        "title": "عکس محصول",
-        "file_url": photo_file_id
-    }).execute()
-
-    clear_waiting_states(message.from_user.id)
-
-    await message.answer("✅ عکس محصول با موفقیت ثبت شد.")
-
-
-@dp.message(F.video)
-async def product_video_file_handler(message: Message):
-    if WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id):
-        media_data = WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id)
-
-        if media_data["media_type"] != "video":
+    if state.get("type") == "product_media":
+        if state.get("media_type") != "photo":
             await message.answer("❌ لطفاً فایل درست را بفرست.")
             return
 
+        photo_file_id = message.photo[-1].file_id
+        supabase.table("product_media").insert({
+            "product_id": state["product_id"],
+            "media_type": "photo",
+            "title": "عکس محصول",
+            "file_url": photo_file_id,
+        }).execute()
+        clear_waiting_states(message.from_user.id)
+        await message.answer(f"✅ عکس محصول {state['product_name']} با موفقیت ثبت شد.")
+        return
+
+
+@dp.message(F.video)
+async def video_file_handler(message: Message):
+    state = get_state(message.from_user.id)
+
+    if not state:
+        return
+
+    if state.get("type") == "training_media_file":
+        if state.get("media_type") != "video":
+            await message.answer("❌ لطفاً ویدئو آموزش را ارسال کن.")
+            return
+
         video_file_id = message.video.file_id
-
-        supabase.table("training_steps").update({
-            media_data["column_name"]: video_file_id
-        }).eq("id", media_data["step_id"]).execute()
-
+        supabase.table("training_steps").update({state["column_name"]: video_file_id}).eq("id", state["step_id"]).execute()
         clear_waiting_states(message.from_user.id)
 
         await message.answer(
             "✅ ویدئو آموزش با موفقیت ثبت شد.\n\n"
-            f"سطح {media_data['level_number']} - مرحله {media_data['step_number']}\n"
-            f"{media_data['title']}"
+            f"سطح {state['level_number']} - مرحله {state['step_number']}\n"
+            f"{state['title']}"
         )
         return
 
-    if not WAITING_VIDEO_FILE.get(message.from_user.id):
-        return
-
-    product_id = WAITING_VIDEO_FILE.get(message.from_user.id)
-    video_file_id = message.video.file_id
-
-    supabase.table("product_media").insert({
-        "product_id": product_id,
-        "media_type": "video",
-        "title": "ویدئوی محصول",
-        "file_url": video_file_id
-    }).execute()
-
-    clear_waiting_states(message.from_user.id)
-
-    await message.answer("✅ ویدئوی محصول با موفقیت ثبت شد.")
-
-
-@dp.message(F.document)
-async def product_catalog_file_handler(message: Message):
-    if WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id):
-        media_data = WAITING_TRAINING_MEDIA_FILE.get(message.from_user.id)
-
-        if media_data["media_type"] != "pdf":
+    if state.get("type") == "product_media":
+        if state.get("media_type") != "video":
             await message.answer("❌ لطفاً فایل درست را بفرست.")
             return
 
+        video_file_id = message.video.file_id
+        supabase.table("product_media").insert({
+            "product_id": state["product_id"],
+            "media_type": "video",
+            "title": "ویدئوی محصول",
+            "file_url": video_file_id,
+        }).execute()
+        clear_waiting_states(message.from_user.id)
+        await message.answer(f"✅ ویدئوی محصول {state['product_name']} با موفقیت ثبت شد.")
+        return
+
+
+@dp.message(F.document)
+async def document_file_handler(message: Message):
+    state = get_state(message.from_user.id)
+
+    if not state:
+        return
+
+    if state.get("type") == "training_media_file":
+        if state.get("media_type") != "pdf":
+            await message.answer("❌ لطفاً PDF آموزش را ارسال کن.")
+            return
+
         document_file_id = message.document.file_id
-
-        supabase.table("training_steps").update({
-            media_data["column_name"]: document_file_id
-        }).eq("id", media_data["step_id"]).execute()
-
+        supabase.table("training_steps").update({state["column_name"]: document_file_id}).eq("id", state["step_id"]).execute()
         clear_waiting_states(message.from_user.id)
 
         await message.answer(
             "✅ PDF آموزش با موفقیت ثبت شد.\n\n"
-            f"سطح {media_data['level_number']} - مرحله {media_data['step_number']}\n"
-            f"{media_data['title']}"
+            f"سطح {state['level_number']} - مرحله {state['step_number']}\n"
+            f"{state['title']}"
         )
         return
 
-    if not WAITING_CATALOG_FILE.get(message.from_user.id):
+    if state.get("type") == "product_media":
+        if state.get("media_type") != "catalog":
+            await message.answer("❌ لطفاً فایل درست را بفرست.")
+            return
+
+        document_file_id = message.document.file_id
+        supabase.table("product_media").insert({
+            "product_id": state["product_id"],
+            "media_type": "catalog",
+            "title": message.document.file_name or "کاتالوگ محصول",
+            "file_url": document_file_id,
+        }).execute()
+        clear_waiting_states(message.from_user.id)
+        await message.answer(f"✅ کاتالوگ محصول {state['product_name']} با موفقیت ثبت شد.")
         return
-
-    product_id = WAITING_CATALOG_FILE.get(message.from_user.id)
-    document_file_id = message.document.file_id
-
-    supabase.table("product_media").insert({
-        "product_id": product_id,
-        "media_type": "catalog",
-        "title": message.document.file_name or "کاتالوگ محصول",
-        "file_url": document_file_id
-    }).execute()
-
-    clear_waiting_states(message.from_user.id)
-
-    await message.answer("✅ کاتالوگ محصول با موفقیت ثبت شد.")
 
 
 @dp.message()
 async def text_handler(message: Message):
-    if WAITING_TRAINING_EDIT_INPUT.get(message.from_user.id):
-        edit_data = WAITING_TRAINING_EDIT_INPUT.get(message.from_user.id)
-        new_content = message.text.strip()
+    state = get_state(message.from_user.id)
 
+    if not state:
+        await message.answer("لطفاً یکی از دکمه‌های منو را انتخاب کن.")
+        return
+
+    state_type = state.get("type")
+
+    if state_type == "training_edit_content":
+        new_content = message.text.strip()
         if not new_content:
             await message.answer("❌ متن آموزش نمی‌تواند خالی باشد.")
             return
 
         try:
-            supabase.table("training_steps").update({
-                "content": new_content
-            }).eq("id", edit_data["step_id"]).execute()
-
+            supabase.table("training_steps").update({"content": new_content}).eq("id", state["step_id"]).execute()
             clear_waiting_states(message.from_user.id)
-
             await message.answer(
                 "✅ محتوای آموزش با موفقیت ویرایش شد.\n\n"
-                f"سطح {edit_data['level_number']} - مرحله {edit_data['step_number']}\n"
-                f"{edit_data['title']}"
+                f"سطح {state['level_number']} - مرحله {state['step_number']}\n"
+                f"{state['title']}"
             )
-
         except Exception:
             await message.answer("❌ خطا در ویرایش محتوای آموزش.")
-
         return
 
-    if WAITING_OBJECTION_INPUT.get(message.from_user.id):
+    if state_type == "training_edit_title":
+        new_title = message.text.strip()
+        if not new_title:
+            await message.answer("❌ عنوان مرحله نمی‌تواند خالی باشد.")
+            return
+
+        try:
+            supabase.table("training_steps").update({"title": new_title}).eq("id", state["step_id"]).execute()
+            clear_waiting_states(message.from_user.id)
+            await message.answer(
+                "✅ عنوان مرحله با موفقیت ویرایش شد.\n\n"
+                f"سطح {state['level_number']} - مرحله {state['step_number']}\n"
+                f"عنوان جدید: {new_title}"
+            )
+        except Exception:
+            await message.answer("❌ خطا در ویرایش عنوان مرحله.")
+        return
+
+    if state_type == "training_edit_level_description":
+        new_description = message.text.strip()
+        if not new_description:
+            await message.answer("❌ توضیح سطح نمی‌تواند خالی باشد.")
+            return
+
+        try:
+            supabase.table("training_levels").update({"description": new_description}).eq("id", state["level_id"]).execute()
+            clear_waiting_states(message.from_user.id)
+            await message.answer(
+                "✅ توضیح سطح با موفقیت ویرایش شد.\n\n"
+                f"سطح {state['level_number']}: {state['title']}"
+            )
+        except Exception:
+            await message.answer("❌ خطا در ویرایش توضیح سطح.")
+        return
+
+    if state_type == "objection_add":
         objection_data = parse_objection_text(message.text)
 
         if not objection_data["objection"] or not objection_data["answer"]:
@@ -1693,105 +1821,14 @@ async def text_handler(message: Message):
             "product_id": None,
             "objection": objection_data["objection"],
             "answer": objection_data["answer"],
-            "is_active": True
+            "is_active": True,
         }).execute()
 
         clear_waiting_states(message.from_user.id)
-
         await message.answer("✅ پاسخ ابجکشن با موفقیت ثبت شد.")
         return
 
-    if WAITING_PHOTO_CODE.get(message.from_user.id):
-        code = message.text.strip()
-
-        product = (
-            supabase.table("products")
-            .select("*")
-            .eq("code", code)
-            .eq("is_active", True)
-            .execute()
-        )
-
-        if not product.data:
-            await message.answer("❌ محصولی با این کد پیدا نشد.")
-            return
-
-        WAITING_PHOTO_CODE.pop(message.from_user.id, None)
-        WAITING_PHOTO_FILE[message.from_user.id] = product.data[0]["id"]
-
-        await message.answer("محصول پیدا شد ✅\nحالا عکس محصول را بفرست.")
-        return
-
-    if WAITING_VIDEO_CODE.get(message.from_user.id):
-        code = message.text.strip()
-
-        product = (
-            supabase.table("products")
-            .select("*")
-            .eq("code", code)
-            .eq("is_active", True)
-            .execute()
-        )
-
-        if not product.data:
-            await message.answer("❌ محصولی با این کد پیدا نشد.")
-            return
-
-        WAITING_VIDEO_CODE.pop(message.from_user.id, None)
-        WAITING_VIDEO_FILE[message.from_user.id] = product.data[0]["id"]
-
-        await message.answer("محصول پیدا شد ✅\nحالا ویدئوی محصول را بفرست.")
-        return
-
-    if WAITING_CATALOG_CODE.get(message.from_user.id):
-        code = message.text.strip()
-
-        product = (
-            supabase.table("products")
-            .select("*")
-            .eq("code", code)
-            .eq("is_active", True)
-            .execute()
-        )
-
-        if not product.data:
-            await message.answer("❌ محصولی با این کد پیدا نشد.")
-            return
-
-        WAITING_CATALOG_CODE.pop(message.from_user.id, None)
-        WAITING_CATALOG_FILE[message.from_user.id] = product.data[0]["id"]
-
-        await message.answer("محصول پیدا شد ✅\nحالا فایل کاتالوگ را بفرست.")
-        return
-
-    if WAITING_FAQ_CODE.get(message.from_user.id):
-        code = message.text.strip()
-
-        product = (
-            supabase.table("products")
-            .select("*")
-            .eq("code", code)
-            .eq("is_active", True)
-            .execute()
-        )
-
-        if not product.data:
-            await message.answer("❌ محصولی با این کد پیدا نشد.")
-            return
-
-        WAITING_FAQ_CODE.pop(message.from_user.id, None)
-        WAITING_FAQ_INPUT[message.from_user.id] = product.data[0]["id"]
-
-        await message.answer(
-            "محصول پیدا شد ✅\n"
-            "حالا سوال و پاسخ را با این قالب بفرست:\n\n"
-            "سوال: \n"
-            "پاسخ: "
-        )
-        return
-
-    if WAITING_FAQ_INPUT.get(message.from_user.id):
-        product_id = WAITING_FAQ_INPUT.get(message.from_user.id)
+    if state_type == "product_faq":
         faq_data = parse_faq_text(message.text)
 
         if not faq_data["question"] or not faq_data["answer"]:
@@ -1799,44 +1836,17 @@ async def text_handler(message: Message):
             return
 
         supabase.table("product_faqs").insert({
-            "product_id": product_id,
+            "product_id": state["product_id"],
             "question": faq_data["question"],
             "answer": faq_data["answer"],
-            "is_active": True
+            "is_active": True,
         }).execute()
 
         clear_waiting_states(message.from_user.id)
-
-        await message.answer("✅ سوال و پاسخ محصول ثبت شد.")
+        await message.answer(f"✅ سوال و پاسخ محصول {state['product_name']} ثبت شد.")
         return
 
-    if WAITING_EDIT_CODE.get(message.from_user.id):
-        code = message.text.strip()
-
-        product = (
-            supabase.table("products")
-            .select("*")
-            .eq("code", code)
-            .eq("is_active", True)
-            .execute()
-        )
-
-        if not product.data:
-            await message.answer("❌ محصولی با این کد پیدا نشد.")
-            return
-
-        WAITING_EDIT_CODE.pop(message.from_user.id, None)
-        WAITING_EDIT_INPUT[message.from_user.id] = product.data[0]["id"]
-
-        await message.answer(
-            "اطلاعات فعلی محصول این است.\n"
-            "هر چیزی را می‌خواهی تغییر بده و همین متن کامل را دوباره بفرست:\n\n"
-            f"{product_template(product.data[0])}"
-        )
-        return
-
-    if WAITING_EDIT_INPUT.get(message.from_user.id):
-        product_id = WAITING_EDIT_INPUT.get(message.from_user.id)
+    if state_type == "product_edit":
         product_data = parse_product_text(message.text)
 
         if not product_data["code"] or not product_data["fa_name"]:
@@ -1846,17 +1856,14 @@ async def text_handler(message: Message):
         product_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         try:
-            supabase.table("products").update(product_data).eq("id", product_id).execute()
+            supabase.table("products").update(product_data).eq("id", state["product_id"]).execute()
             clear_waiting_states(message.from_user.id)
-
             await message.answer("✅ محصول با موفقیت ویرایش شد.")
-
         except Exception:
             await message.answer("❌ خطا در ویرایش محصول.")
-
         return
 
-    if WAITING_PRODUCT_INPUT.get(message.from_user.id):
+    if state_type == "product_add":
         product_data = parse_product_text(message.text)
 
         if not product_data["code"] or not product_data["fa_name"]:
@@ -1866,15 +1873,14 @@ async def text_handler(message: Message):
         try:
             supabase.table("products").insert(product_data).execute()
             clear_waiting_states(message.from_user.id)
-
             await message.answer(
                 "✅ محصول با موفقیت ثبت شد.\n\n"
                 f"کد محصول: {product_data['code']}\n"
                 f"نام محصول: {product_data['fa_name']}"
             )
-
         except Exception:
             await message.answer("❌ خطا در ثبت محصول. احتمالاً کد محصول تکراری است.")
+        return
 
 
 async def main():
