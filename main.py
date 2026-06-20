@@ -124,6 +124,7 @@ def get_menu(role: str):
             [KeyboardButton(text="📦 مدیریت محصولات")],
             [KeyboardButton(text="🛡 مدیریت ابجکشن‌ها")],
             [KeyboardButton(text="🎓 مدیریت آموزش‌ها")],
+            [KeyboardButton(text="❓ سوالات بی‌جواب")],
             [KeyboardButton(text="📝 افزودن محتوا")],
         ]
     else:
@@ -131,6 +132,7 @@ def get_menu(role: str):
             [KeyboardButton(text="📦 محصولات")],
             [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
             [KeyboardButton(text="🎓 آموزش‌ها")],
+            [KeyboardButton(text="✍️ ارسال سوال")],
             [KeyboardButton(text="❓ سوالات پرتکرار")],
         ]
 
@@ -163,6 +165,16 @@ def get_objections_menu():
     buttons = [
         [KeyboardButton(text="➕ افزودن پاسخ ابجکشن")],
         [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def get_questions_menu():
+    buttons = [
+        [KeyboardButton(text="📋 سوالات جدید")],
+        [KeyboardButton(text="✅ سوالات پاسخ‌داده‌شده")],
+        [KeyboardButton(text="🗂 سوالات آرشیو")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -860,6 +872,267 @@ async def prepare_edit_level_description(target, telegram_id: int, level_number:
         f"{level.get('description') or 'توضیحی ثبت نشده است.'}\n\n"
         "توضیح جدید سطح را بفرست."
     )
+
+
+
+def get_question_status_label(status: str):
+    if status == "new":
+        return "جدید"
+    if status == "answered":
+        return "پاسخ‌داده‌شده"
+    if status == "archived":
+        return "آرشیو"
+    return status or "نامشخص"
+
+
+async def send_unanswered_questions_menu(target):
+    await target.answer(
+        "❓ مدیریت سوالات مشتری‌ها\n\n"
+        "یکی از بخش‌ها را انتخاب کن:",
+        reply_markup=get_questions_menu(),
+    )
+
+
+async def send_questions_list(target, status: str = "new"):
+    title_map = {
+        "new": "📋 سوالات جدید",
+        "answered": "✅ سوالات پاسخ‌داده‌شده",
+        "archived": "🗂 سوالات آرشیو",
+    }
+
+    try:
+        query = (
+            supabase.table("unanswered_questions")
+            .select("*")
+            .eq("status", status)
+            .order("created_at", desc=True)
+            .limit(30)
+            .execute()
+        )
+    except Exception as e:
+        await target.answer(
+            "❌ خطا در خواندن سوالات.\n\n"
+            "اگر هنوز جدول را نساختی، SQL مربوط به unanswered_questions را در Supabase اجرا کن."
+        )
+        return
+
+    if not query.data:
+        await target.answer(f"{title_map.get(status, 'سوالات')}\n\nموردی پیدا نشد.")
+        return
+
+    buttons = []
+    for item in query.data:
+        question_text = (item.get("question") or "").replace("\n", " ")
+        if len(question_text) > 35:
+            question_text = question_text[:35] + "..."
+
+        name = item.get("full_name") or "کاربر"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{name}: {question_text}",
+                callback_data=f"uq_detail:{item.get('id')}",
+            )
+        ])
+
+    await target.answer(
+        f"{title_map.get(status, 'سوالات')}\n\n"
+        "برای دیدن جزئیات، روی سوال بزن:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+async def send_question_detail(target, question_id: str):
+    result = (
+        supabase.table("unanswered_questions")
+        .select("*")
+        .eq("id", question_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not result.data:
+        await target.answer("❌ سوال پیدا نشد.")
+        return
+
+    item = result.data[0]
+    username = f"@{item.get('username')}" if item.get("username") else "-"
+    status = item.get("status") or "new"
+
+    text = "❓ جزئیات سوال\n\n"
+    text += f"نام: {item.get('full_name') or '-'}\n"
+    text += f"یوزرنیم: {username}\n"
+    text += f"تلگرام آیدی: {item.get('telegram_id') or '-'}\n"
+    text += f"وضعیت: {get_question_status_label(status)}\n\n"
+    text += f"سوال:\n{item.get('question') or '-'}\n\n"
+
+    if item.get("answer"):
+        text += f"پاسخ:\n{item.get('answer')}\n"
+
+    buttons = []
+
+    if status != "answered":
+        buttons.append([
+            InlineKeyboardButton(
+                text="✍️ پاسخ دادن",
+                callback_data=f"uq_answer:{question_id}",
+            )
+        ])
+
+    if status != "archived":
+        buttons.append([
+            InlineKeyboardButton(
+                text="🗂 آرشیو کردن",
+                callback_data=f"uq_archive:{question_id}",
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 بازگشت به لیست",
+            callback_data=f"uq_list:{status}",
+        )
+    ])
+
+    await target.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+async def prepare_answer_question(target, telegram_id: int, question_id: str):
+    result = (
+        supabase.table("unanswered_questions")
+        .select("*")
+        .eq("id", question_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not result.data:
+        await target.answer("❌ سوال پیدا نشد.")
+        return
+
+    item = result.data[0]
+
+    set_state(telegram_id, "unanswered_answer", {
+        "question_id": question_id,
+        "customer_telegram_id": item.get("telegram_id"),
+        "question": item.get("question"),
+        "full_name": item.get("full_name"),
+    })
+
+    await target.answer(
+        "✍️ پاسخ به سوال\n\n"
+        f"سوال مشتری:\n{item.get('question')}\n\n"
+        "حالا پاسخ را ارسال کن."
+    )
+
+
+def get_public_faq_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="📋 مشاهده همه سوالات پرتکرار", callback_data="public_faq_list")],
+        [InlineKeyboardButton(text="🔎 جستجو در سوالات پرتکرار", callback_data="public_faq_search")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def format_public_faqs(items, title: str):
+    text = f"{title}\n\n"
+
+    count = 0
+    for item in items:
+        question = (item.get("question") or "").strip()
+        answer = (item.get("answer") or "").strip()
+
+        if not question or not answer:
+            continue
+
+        count += 1
+        text += f"{count}. سوال: {question}\n"
+        text += f"پاسخ: {answer}\n"
+        text += "------------------\n"
+
+        if count >= 15:
+            break
+
+    if count == 0:
+        return "❓ سوالات پرتکرار عمومی\n\nهنوز سوال پاسخ‌داده‌شده‌ای برای نمایش عمومی وجود ندارد."
+
+    if len(items) > count:
+        text += "\nبرای پیدا کردن سوال خاص، از دکمه 🔎 جستجو استفاده کن."
+
+    return text
+
+
+async def send_public_faq_menu(target):
+    await target.answer(
+        "❓ سوالات پرتکرار عمومی\n\n"
+        "اینجا سوال‌هایی نمایش داده می‌شود که مشتری‌ها پرسیده‌اند و ادمین یا ویراستار پاسخ داده است.\n\n"
+        "اگر سوال‌ها زیاد شد، با جستجو سریع‌تر پیدایش کن.",
+        reply_markup=get_public_faq_keyboard(),
+    )
+
+
+async def send_public_faq_list(target):
+    try:
+        result = (
+            supabase.table("unanswered_questions")
+            .select("*")
+            .eq("status", "answered")
+            .eq("is_active", True)
+            .order("answered_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+    except Exception:
+        await target.answer("❌ خطا در خواندن سوالات پرتکرار عمومی.")
+        return
+
+    items = [
+        item for item in (result.data or [])
+        if (item.get("question") or "").strip() and (item.get("answer") or "").strip()
+    ]
+
+    await target.answer(format_public_faqs(items, "❓ سوالات پرتکرار عمومی"))
+
+
+async def send_public_faq_search_result(target, keyword: str):
+    keyword = keyword.strip()
+
+    if not keyword:
+        await target.answer("❌ عبارت جستجو نمی‌تواند خالی باشد.")
+        return
+
+    try:
+        result = (
+            supabase.table("unanswered_questions")
+            .select("*")
+            .eq("status", "answered")
+            .eq("is_active", True)
+            .order("answered_at", desc=True)
+            .limit(200)
+            .execute()
+        )
+    except Exception:
+        await target.answer("❌ خطا در جستجوی سوالات پرتکرار عمومی.")
+        return
+
+    keyword_lower = keyword.lower()
+    matched_items = []
+
+    for item in result.data or []:
+        question = (item.get("question") or "").lower()
+        answer = (item.get("answer") or "").lower()
+
+        if keyword_lower in question or keyword_lower in answer:
+            matched_items.append(item)
+
+    if not matched_items:
+        await target.answer(
+            "🔎 نتیجه جستجو\n\n"
+            f"برای عبارت «{keyword}» موردی پیدا نشد.\n\n"
+            "می‌توانی با کلمه کوتاه‌تر دوباره جستجو کنی."
+        )
+        return
+
+    await target.answer(format_public_faqs(matched_items, f"🔎 نتیجه جستجو برای: {keyword}"))
 
 
 @dp.message(CommandStart())
@@ -1582,6 +1855,33 @@ async def delete_media_photo_level_callback(callback: CallbackQuery):
     await send_training_step_selection(callback.message, "delete_media_photo", int(level_text), "🗑 حذف عکس آموزش", "delete_media_photo_levels")
 
 
+@dp.callback_query(F.data == "delete_media_pdf_levels")
+async def delete_media_pdf_levels_back(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_level_selection(callback.message, "delete_media_pdf", "🗑 حذف PDF آموزش")
+
+
+@dp.callback_query(F.data == "delete_media_video_levels")
+async def delete_media_video_levels_back(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_level_selection(callback.message, "delete_media_video", "🗑 حذف ویدئو آموزش")
+
+
+@dp.callback_query(F.data == "delete_media_photo_levels")
+async def delete_media_photo_levels_back(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_level_selection(callback.message, "delete_media_photo", "🗑 حذف عکس آموزش")
+
+
 @dp.callback_query(F.data.startswith("delete_media_pdf_step:"))
 async def delete_media_pdf_step_callback(callback: CallbackQuery):
     parts = callback.data.split(":")
@@ -1612,14 +1912,145 @@ async def delete_media_photo_step_callback(callback: CallbackQuery):
     await delete_training_media(callback.message, "photo", int(parts[1]), int(parts[2]))
 
 
+
+@dp.message(F.text == "✍️ ارسال سوال")
+async def ask_question_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    set_state(message.from_user.id, "ask_question")
+
+    await message.answer(
+        "✍️ سوالت را همینجا بنویس و ارسال کن.\n\n"
+        "ادمین یا ویراستار بعداً پاسخ می‌دهد."
+    )
+
+
 @dp.message(F.text == "❓ سوالات بی‌جواب")
 async def unanswered_questions_handler(message: Message):
-    await message.answer("❓ بخش سوالات بی‌جواب در قدم بعدی دکمه‌ای و کامل می‌شود.")
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.")
+        return
+
+    await send_unanswered_questions_menu(message)
+
+
+@dp.message(F.text == "📋 سوالات جدید")
+async def new_questions_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.")
+        return
+
+    await send_questions_list(message, "new")
+
+
+@dp.message(F.text == "✅ سوالات پاسخ‌داده‌شده")
+async def answered_questions_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.")
+        return
+
+    await send_questions_list(message, "answered")
+
+
+@dp.message(F.text == "🗂 سوالات آرشیو")
+async def archived_questions_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.")
+        return
+
+    await send_questions_list(message, "archived")
+
+
+@dp.callback_query(F.data.startswith("uq_list:"))
+async def uq_list_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.", show_alert=True)
+        return
+
+    status = callback.data.split(":")[1]
+    await callback.answer()
+    await send_questions_list(callback.message, status)
+
+
+@dp.callback_query(F.data.startswith("uq_detail:"))
+async def uq_detail_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.", show_alert=True)
+        return
+
+    question_id = callback.data.replace("uq_detail:", "").strip()
+    await callback.answer()
+    await send_question_detail(callback.message, question_id)
+
+
+@dp.callback_query(F.data.startswith("uq_answer:"))
+async def uq_answer_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.", show_alert=True)
+        return
+
+    question_id = callback.data.replace("uq_answer:", "").strip()
+    await callback.answer()
+    await prepare_answer_question(callback.message, callback.from_user.id, question_id)
+
+
+@dp.callback_query(F.data.startswith("uq_archive:"))
+async def uq_archive_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی مدیریت سوالات را ندارید.", show_alert=True)
+        return
+
+    question_id = callback.data.replace("uq_archive:", "").strip()
+
+    supabase.table("unanswered_questions").update({
+        "status": "archived",
+        "is_active": False,
+    }).eq("id", question_id).execute()
+
+    await callback.answer("✅ سوال آرشیو شد.", show_alert=True)
+    await send_questions_list(callback.message, "new")
 
 
 @dp.message(F.text == "❓ سوالات پرتکرار")
 async def common_questions_handler(message: Message):
-    await message.answer("❓ سوالات پرتکرار فعلاً از داخل هر محصول نمایش داده می‌شود.")
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+
+    await send_public_faq_menu(message)
+
+
+@dp.callback_query(F.data == "public_faq_list")
+async def public_faq_list_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_public_faq_list(callback.message)
+
+
+@dp.callback_query(F.data == "public_faq_search")
+async def public_faq_search_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+
+    clear_waiting_states(callback.from_user.id)
+    set_state(callback.from_user.id, "public_faq_search")
+
+    await callback.answer()
+    await callback.message.answer(
+        "🔎 جستجو در سوالات پرتکرار عمومی\n\n"
+        "یک کلمه یا عبارت از سوالت را بفرست.\n\n"
+        "مثال:\n"
+        "ثبت سفارش\n"
+        "ارسال محصول\n"
+        "تخفیف"
+    )
 
 
 @dp.message(F.text == "📝 افزودن محتوا")
@@ -1756,6 +2187,86 @@ async def text_handler(message: Message):
         return
 
     state_type = state.get("type")
+
+    if state_type == "public_faq_search":
+        keyword = message.text.strip()
+        clear_waiting_states(message.from_user.id)
+        await send_public_faq_search_result(message, keyword)
+        return
+
+    if state_type == "ask_question":
+        question_text = message.text.strip()
+
+        if not question_text:
+            await message.answer("❌ سوال نمی‌تواند خالی باشد.")
+            return
+
+        user = get_current_user(message.from_user.id)
+
+        try:
+            supabase.table("unanswered_questions").insert({
+                "user_id": user.get("id") if user else None,
+                "telegram_id": message.from_user.id,
+                "full_name": message.from_user.full_name,
+                "username": message.from_user.username,
+                "question": question_text,
+                "status": "new",
+                "is_active": True,
+            }).execute()
+
+            clear_waiting_states(message.from_user.id)
+
+            await message.answer(
+                "✅ سوال شما ثبت شد.\n\n"
+                "بعد از بررسی، پاسخ توسط ادمین یا ویراستار ارسال می‌شود."
+            )
+
+        except Exception:
+            await message.answer(
+                "❌ خطا در ثبت سوال.\n\n"
+                "اگر این خطا تکرار شد، جدول unanswered_questions را در Supabase بررسی کن."
+            )
+
+        return
+
+    if state_type == "unanswered_answer":
+        answer_text = message.text.strip()
+
+        if not answer_text:
+            await message.answer("❌ پاسخ نمی‌تواند خالی باشد.")
+            return
+
+        try:
+            supabase.table("unanswered_questions").update({
+                "answer": answer_text,
+                "status": "answered",
+                "answered_by": message.from_user.id,
+                "answered_at": datetime.now(timezone.utc).isoformat(),
+                "is_active": True,
+            }).eq("id", state["question_id"]).execute()
+
+            customer_telegram_id = state.get("customer_telegram_id")
+            if customer_telegram_id:
+                try:
+                    await bot.send_message(
+                        chat_id=customer_telegram_id,
+                        text=(
+                            "✅ پاسخ سوال شما آماده شد.\n\n"
+                            f"سوال:\n{state.get('question')}\n\n"
+                            f"پاسخ:\n{answer_text}"
+                        ),
+                    )
+                except Exception:
+                    pass
+
+            clear_waiting_states(message.from_user.id)
+
+            await message.answer("✅ پاسخ ثبت شد و وضعیت سوال به پاسخ‌داده‌شده تغییر کرد.")
+
+        except Exception:
+            await message.answer("❌ خطا در ثبت پاسخ سوال.")
+
+        return
 
     if state_type == "training_edit_content":
         new_content = message.text.strip()
