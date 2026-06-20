@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
@@ -15,9 +16,12 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 VALID_ROLES = ["approved_customer", "content_contributor", "admin"]
+
 WAITING_PRODUCT_INPUT = {}
 WAITING_PHOTO_CODE = {}
 WAITING_PHOTO_FILE = {}
+WAITING_EDIT_CODE = {}
+WAITING_EDIT_INPUT = {}
 
 
 def register_user(message: Message):
@@ -80,6 +84,14 @@ def can_view_content(telegram_id: int):
     return user and user["is_active"]
 
 
+def clear_waiting_states(telegram_id: int):
+    WAITING_PRODUCT_INPUT.pop(telegram_id, None)
+    WAITING_PHOTO_CODE.pop(telegram_id, None)
+    WAITING_PHOTO_FILE.pop(telegram_id, None)
+    WAITING_EDIT_CODE.pop(telegram_id, None)
+    WAITING_EDIT_INPUT.pop(telegram_id, None)
+
+
 def get_menu(role: str):
     if role == "admin":
         buttons = [
@@ -108,6 +120,7 @@ def get_products_menu():
     buttons = [
         [KeyboardButton(text="➕ افزودن محصول")],
         [KeyboardButton(text="🖼 افزودن عکس محصول")],
+        [KeyboardButton(text="✏️ ویرایش محصول")],
         [KeyboardButton(text="📦 محصولات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ]
@@ -163,6 +176,21 @@ def parse_product_text(text: str):
     return data
 
 
+def product_template(product):
+    return (
+        f"کد محصول: {product.get('code') or ''}\n"
+        f"نام فارسی: {product.get('fa_name') or ''}\n"
+        f"نام انگلیسی: {product.get('en_name') or ''}\n"
+        f"حجم: {product.get('volume') or ''}\n"
+        f"دسته بندی: {product.get('category') or ''}\n"
+        f"ویژگی‌ها: {product.get('features') or ''}\n"
+        f"مزایا: {product.get('benefits') or ''}\n"
+        f"نحوه استفاده: {product.get('usage_method') or ''}\n"
+        f"نکات مهم: {product.get('important_notes') or ''}\n"
+        f"متن معرفی: {product.get('intro_text') or ''}"
+    )
+
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     user = register_user(message)
@@ -185,10 +213,7 @@ async def start_handler(message: Message):
 @dp.message(F.text == "🔙 بازگشت به منوی اصلی")
 async def back_to_main_menu_handler(message: Message):
     user = get_current_user(message.from_user.id)
-
-    WAITING_PRODUCT_INPUT.pop(message.from_user.id, None)
-    WAITING_PHOTO_CODE.pop(message.from_user.id, None)
-    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
+    clear_waiting_states(message.from_user.id)
 
     if not user or not user["is_active"]:
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
@@ -328,9 +353,8 @@ async def add_product_handler(message: Message):
         await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
         return
 
+    clear_waiting_states(message.from_user.id)
     WAITING_PRODUCT_INPUT[message.from_user.id] = True
-    WAITING_PHOTO_CODE.pop(message.from_user.id, None)
-    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
 
     await message.answer(
         "اطلاعات محصول را با همین قالب پر کن و بفرست:\n\n"
@@ -353,12 +377,27 @@ async def add_product_photo_handler(message: Message):
         await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
         return
 
-    WAITING_PRODUCT_INPUT.pop(message.from_user.id, None)
+    clear_waiting_states(message.from_user.id)
     WAITING_PHOTO_CODE[message.from_user.id] = True
-    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
 
     await message.answer(
         "کد محصولی که می‌خواهی عکسش را اضافه کنی بفرست.\n\n"
+        "مثال:\n"
+        "015"
+    )
+
+
+@dp.message(F.text == "✏️ ویرایش محصول")
+async def edit_product_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش محصول ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    WAITING_EDIT_CODE[message.from_user.id] = True
+
+    await message.answer(
+        "کد محصولی که می‌خواهی ویرایش کنی را بفرست.\n\n"
         "مثال:\n"
         "015"
     )
@@ -462,8 +501,7 @@ async def product_photo_file_handler(message: Message):
         "file_url": photo_file_id
     }).execute()
 
-    WAITING_PHOTO_FILE.pop(message.from_user.id, None)
-    WAITING_PHOTO_CODE.pop(message.from_user.id, None)
+    clear_waiting_states(message.from_user.id)
 
     await message.answer("✅ عکس محصول با موفقیت ثبت شد.")
 
@@ -498,6 +536,66 @@ async def text_handler(message: Message):
         )
         return
 
+    if WAITING_EDIT_CODE.get(message.from_user.id):
+        if not can_manage_content(message.from_user.id):
+            await message.answer("⛔ شما دسترسی ویرایش محصول ندارید.")
+            return
+
+        code = message.text.strip()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
+
+        if not product.data:
+            await message.answer("❌ محصولی با این کد پیدا نشد. دوباره کد درست را بفرست.")
+            return
+
+        WAITING_EDIT_CODE.pop(message.from_user.id, None)
+        WAITING_EDIT_INPUT[message.from_user.id] = product.data[0]["id"]
+
+        await message.answer(
+            "اطلاعات فعلی محصول این است.\n"
+            "هر چیزی را می‌خواهی تغییر بده و همین متن کامل را دوباره بفرست:\n\n"
+            f"{product_template(product.data[0])}"
+        )
+        return
+
+    if WAITING_EDIT_INPUT.get(message.from_user.id):
+        if not can_manage_content(message.from_user.id):
+            await message.answer("⛔ شما دسترسی ویرایش محصول ندارید.")
+            return
+
+        product_id = WAITING_EDIT_INPUT.get(message.from_user.id)
+        product_data = parse_product_text(message.text)
+
+        if not product_data["code"] or not product_data["fa_name"]:
+            await message.answer("❌ کد محصول و نام فارسی الزامی است.")
+            return
+
+        product_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        try:
+            supabase.table("products").update(product_data).eq("id", product_id).execute()
+            clear_waiting_states(message.from_user.id)
+
+            await message.answer(
+                "✅ محصول با موفقیت ویرایش شد.\n\n"
+                f"کد محصول: {product_data['code']}\n"
+                f"نام محصول: {product_data['fa_name']}"
+            )
+
+        except Exception:
+            await message.answer(
+                "❌ خطا در ویرایش محصول.\n"
+                "احتمالاً کد محصول تکراری است."
+            )
+        return
+
     if WAITING_PRODUCT_INPUT.get(message.from_user.id):
         if not can_manage_content(message.from_user.id):
             await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
@@ -514,7 +612,7 @@ async def text_handler(message: Message):
 
         try:
             supabase.table("products").insert(product_data).execute()
-            WAITING_PRODUCT_INPUT.pop(message.from_user.id, None)
+            clear_waiting_states(message.from_user.id)
 
             await message.answer(
                 "✅ محصول با موفقیت ثبت شد.\n\n"
