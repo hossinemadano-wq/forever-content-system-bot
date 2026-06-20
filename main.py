@@ -1054,7 +1054,7 @@ def format_public_faqs(items, title: str):
             break
 
     if count == 0:
-        return "❓ سوالات پرتکرار عمومی\n\nهنوز سوال پاسخ‌داده‌شده‌ای برای نمایش عمومی وجود ندارد."
+        return "❓ سوالات پرتکرار عمومی\n\nهنوز سوال پاسخ‌داده‌شده‌ای برای نمایش عمومی وجود ندارد.\n\nاگر سوالی داری، از دکمه ✍️ ارسال سوال استفاده کن."
 
     if len(items) > count:
         text += "\nبرای پیدا کردن سوال خاص، از دکمه 🔎 جستجو استفاده کن."
@@ -1065,8 +1065,9 @@ def format_public_faqs(items, title: str):
 async def send_public_faq_menu(target):
     await target.answer(
         "❓ سوالات پرتکرار عمومی\n\n"
-        "اینجا سوال‌هایی نمایش داده می‌شود که مشتری‌ها پرسیده‌اند و ادمین یا ویراستار پاسخ داده است.\n\n"
-        "اگر سوال‌ها زیاد شد، با جستجو سریع‌تر پیدایش کن.",
+        "اینجا جواب سوال‌هایی را می‌بینی که مشتری‌ها قبلاً پرسیده‌اند و ادمین یا ویراستار پاسخ داده است.\n\n"
+        "برای دیدن همه سوال‌ها، گزینه 📋 مشاهده همه سوالات پرتکرار را بزن.\n"
+        "اگر دنبال موضوع خاصی هستی، گزینه 🔎 جستجو در سوالات پرتکرار را انتخاب کن.",
         reply_markup=get_public_faq_keyboard(),
     )
 
@@ -1098,7 +1099,7 @@ async def send_public_faq_search_result(target, keyword: str):
     keyword = keyword.strip()
 
     if not keyword:
-        await target.answer("❌ عبارت جستجو نمی‌تواند خالی باشد.")
+        await target.answer("❌ عبارت جستجو نمی‌تواند خالی باشد.\n\nیک کلمه بفرست؛ مثلاً: آلوئه، سفارش، قیمت")
         return
 
     try:
@@ -1129,7 +1130,9 @@ async def send_public_faq_search_result(target, keyword: str):
         await target.answer(
             "🔎 نتیجه جستجو\n\n"
             f"برای عبارت «{keyword}» موردی پیدا نشد.\n\n"
-            "می‌توانی با کلمه کوتاه‌تر دوباره جستجو کنی."
+            "یک کلمه ساده‌تر امتحان کن؛ مثلاً:\n"
+            "سفارش، ارسال، تخفیف، قیمت\n\n"
+            "همینجا دوباره کلمه جدید را بفرست."
         )
         return
 
@@ -1191,7 +1194,7 @@ async def send_global_search_result(target, keyword: str):
     keyword = keyword.strip()
 
     if not keyword:
-        await target.answer("❌ عبارت جستجو نمی‌تواند خالی باشد.")
+        await target.answer("❌ عبارت جستجو نمی‌تواند خالی باشد.\n\nیک کلمه بفرست؛ مثلاً: آلوئه، سفارش، قیمت")
         return
 
     product_matches = []
@@ -1355,7 +1358,9 @@ async def send_global_search_result(target, keyword: str):
         await target.answer(
             "🔎 نتیجه جستجو\n\n"
             f"برای عبارت «{keyword}» چیزی پیدا نشد.\n\n"
-            "می‌توانی با یک کلمه کوتاه‌تر جستجو کنی یا از دکمه ✍️ ارسال سوال استفاده کنی."
+            "یک کلمه ساده‌تر امتحان کن؛ مثلاً:\n"
+            "آلوئه، محصول، سفارش، قیمت، تخفیف\n\n"
+            "همینجا دوباره کلمه جدید را بفرست یا از دکمه ✍️ ارسال سوال استفاده کن."
         )
         return
 
@@ -1404,11 +1409,13 @@ async def start_handler(message: Message):
 
     await message.answer(
         "سلام 👋\n"
-        "به سیستم آموزشی فوراور خوش آمدید ✅",
+        "به سیستم آموزشی فوراور خوش آمدید ✅\n\n"
+        "از دکمه‌های پایین شروع کن 👇",
         reply_markup=get_menu(user.get("role")),
     )
 
 
+@dp.message(F.text == "🏠 منوی اصلی")
 @dp.message(F.text == "🔙 بازگشت به منوی اصلی")
 async def back_to_main_menu_handler(message: Message):
     user = get_current_user(message.from_user.id)
@@ -1418,7 +1425,7 @@ async def back_to_main_menu_handler(message: Message):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
 
-    await message.answer("منوی اصلی:", reply_markup=get_menu(user.get("role")))
+    await message.answer("🏠 منوی اصلی\n\nاز دکمه‌های پایین یکی را انتخاب کن 👇", reply_markup=get_menu(user.get("role")))
 
 
 @dp.message(F.text == "👥 مدیریت کاربران")
@@ -2185,10 +2192,12 @@ async def global_search_handler(message: Message):
         "🎓 آموزش‌ها\n"
         "🛡 ابجکشن‌ها\n"
         "❓ سوالات پرتکرار عمومی\n\n"
-        "مثال:\n"
+        "مثال‌های خوب برای جستجو:\n"
         "آلوئه ورا\n"
         "ثبت سفارش\n"
-        "اعتراض قیمت"
+        "اعتراض قیمت\n\n"
+        "اگر نتیجه نگرفتی، همینجا یک کلمه ساده‌تر بفرست.\n"
+        "برای خروج هم از دکمه 🔙 بازگشت به منوی اصلی استفاده کن."
     )
 
 
@@ -2328,7 +2337,9 @@ async def public_faq_search_callback(callback: CallbackQuery):
         "مثال:\n"
         "ثبت سفارش\n"
         "ارسال محصول\n"
-        "تخفیف"
+        "تخفیف\n\n"
+        "اگر نتیجه نگرفتی، همینجا یک کلمه ساده‌تر بفرست.\n"
+        "برای خروج هم از دکمه 🔙 بازگشت به منوی اصلی استفاده کن."
     )
 
 
@@ -2462,7 +2473,16 @@ async def text_handler(message: Message):
     state = get_state(message.from_user.id)
 
     if not state:
-        await message.answer("لطفاً یکی از دکمه‌های منو را انتخاب کن.")
+        user = get_current_user(message.from_user.id)
+        if user and user.get("is_active"):
+            await message.answer(
+                "لطفاً از دکمه‌های پایین یکی را انتخاب کن 👇\n\n"
+                "اگر دنبال چیزی هستی، از دکمه 🔎 جستجو استفاده کن.\n"
+                "اگر جواب سوالت را پیدا نکردی، از دکمه ✍️ ارسال سوال استفاده کن.",
+                reply_markup=get_menu(user.get("role")),
+            )
+        else:
+            await message.answer("⛔ حساب شما هنوز فعال نیست یا ثبت‌نام کامل نشده است. لطفاً /start را بزن.")
         return
 
     state_type = state.get("type")
