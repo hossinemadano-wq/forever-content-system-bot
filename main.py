@@ -20,6 +20,8 @@ VALID_ROLES = ["approved_customer", "content_contributor", "admin"]
 WAITING_PRODUCT_INPUT = {}
 WAITING_PHOTO_CODE = {}
 WAITING_PHOTO_FILE = {}
+WAITING_VIDEO_CODE = {}
+WAITING_VIDEO_FILE = {}
 WAITING_EDIT_CODE = {}
 WAITING_EDIT_INPUT = {}
 
@@ -88,6 +90,8 @@ def clear_waiting_states(telegram_id: int):
     WAITING_PRODUCT_INPUT.pop(telegram_id, None)
     WAITING_PHOTO_CODE.pop(telegram_id, None)
     WAITING_PHOTO_FILE.pop(telegram_id, None)
+    WAITING_VIDEO_CODE.pop(telegram_id, None)
+    WAITING_VIDEO_FILE.pop(telegram_id, None)
     WAITING_EDIT_CODE.pop(telegram_id, None)
     WAITING_EDIT_INPUT.pop(telegram_id, None)
 
@@ -120,6 +124,7 @@ def get_products_menu():
     buttons = [
         [KeyboardButton(text="➕ افزودن محصول")],
         [KeyboardButton(text="🖼 افزودن عکس محصول")],
+        [KeyboardButton(text="🎥 افزودن ویدئو محصول")],
         [KeyboardButton(text="✏️ ویرایش محصول")],
         [KeyboardButton(text="📦 محصولات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
@@ -387,6 +392,22 @@ async def add_product_photo_handler(message: Message):
     )
 
 
+@dp.message(F.text == "🎥 افزودن ویدئو محصول")
+async def add_product_video_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    WAITING_VIDEO_CODE[message.from_user.id] = True
+
+    await message.answer(
+        "کد محصولی که می‌خواهی ویدئوی آن را اضافه کنی بفرست.\n\n"
+        "مثال:\n"
+        "015"
+    )
+
+
 @dp.message(F.text == "✏️ ویرایش محصول")
 async def edit_product_handler(message: Message):
     if not can_manage_content(message.from_user.id):
@@ -453,7 +474,7 @@ async def product_detail_handler(message: Message):
 
     product = result.data[0]
 
-    media = (
+    photo = (
         supabase.table("product_media")
         .select("*")
         .eq("product_id", product.get("id"))
@@ -462,10 +483,25 @@ async def product_detail_handler(message: Message):
         .execute()
     )
 
-    if media.data:
+    if photo.data:
         await message.answer_photo(
-            photo=media.data[0].get("file_url"),
+            photo=photo.data[0].get("file_url"),
             caption=f"📦 {product.get('fa_name')}"
+        )
+
+    video = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "video")
+        .limit(1)
+        .execute()
+    )
+
+    if video.data:
+        await message.answer_video(
+            video=video.data[0].get("file_url"),
+            caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}"
         )
 
     text = f"📦 {product.get('fa_name')}\n\n"
@@ -506,6 +542,30 @@ async def product_photo_file_handler(message: Message):
     await message.answer("✅ عکس محصول با موفقیت ثبت شد.")
 
 
+@dp.message(F.video)
+async def product_video_file_handler(message: Message):
+    if not WAITING_VIDEO_FILE.get(message.from_user.id):
+        return
+
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
+        return
+
+    product_id = WAITING_VIDEO_FILE.get(message.from_user.id)
+    video_file_id = message.video.file_id
+
+    supabase.table("product_media").insert({
+        "product_id": product_id,
+        "media_type": "video",
+        "title": "ویدئوی محصول",
+        "file_url": video_file_id
+    }).execute()
+
+    clear_waiting_states(message.from_user.id)
+
+    await message.answer("✅ ویدئوی محصول با موفقیت ثبت شد.")
+
+
 @dp.message()
 async def text_handler(message: Message):
     if WAITING_PHOTO_CODE.get(message.from_user.id):
@@ -533,6 +593,34 @@ async def text_handler(message: Message):
         await message.answer(
             f"محصول پیدا شد: {product.data[0].get('fa_name')}\n\n"
             "حالا عکس محصول را همینجا ارسال کن."
+        )
+        return
+
+    if WAITING_VIDEO_CODE.get(message.from_user.id):
+        if not can_manage_content(message.from_user.id):
+            await message.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.")
+            return
+
+        code = message.text.strip()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
+
+        if not product.data:
+            await message.answer("❌ محصولی با این کد پیدا نشد. دوباره کد درست را بفرست.")
+            return
+
+        WAITING_VIDEO_CODE.pop(message.from_user.id, None)
+        WAITING_VIDEO_FILE[message.from_user.id] = product.data[0]["id"]
+
+        await message.answer(
+            f"محصول پیدا شد: {product.data[0].get('fa_name')}\n\n"
+            "حالا ویدئوی محصول را همینجا ارسال کن."
         )
         return
 
