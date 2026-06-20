@@ -28,6 +28,7 @@ WAITING_EDIT_CODE = {}
 WAITING_EDIT_INPUT = {}
 WAITING_FAQ_CODE = {}
 WAITING_FAQ_INPUT = {}
+WAITING_OBJECTION_INPUT = {}
 
 
 def register_user(message: Message):
@@ -102,6 +103,7 @@ def clear_waiting_states(telegram_id: int):
     WAITING_EDIT_INPUT.pop(telegram_id, None)
     WAITING_FAQ_CODE.pop(telegram_id, None)
     WAITING_FAQ_INPUT.pop(telegram_id, None)
+    WAITING_OBJECTION_INPUT.pop(telegram_id, None)
 
 
 def get_menu(role: str):
@@ -109,18 +111,21 @@ def get_menu(role: str):
         buttons = [
             [KeyboardButton(text="👥 مدیریت کاربران")],
             [KeyboardButton(text="📦 مدیریت محصولات")],
+            [KeyboardButton(text="🛡 مدیریت اعتراضات")],
             [KeyboardButton(text="🎓 مدیریت آموزش‌ها")],
             [KeyboardButton(text="❓ سوالات بی‌جواب")]
         ]
     elif role == "content_contributor":
         buttons = [
             [KeyboardButton(text="📦 مدیریت محصولات")],
+            [KeyboardButton(text="🛡 مدیریت اعتراضات")],
             [KeyboardButton(text="🎓 افزودن آموزش")],
             [KeyboardButton(text="📝 افزودن محتوا")]
         ]
     else:
         buttons = [
             [KeyboardButton(text="📦 محصولات")],
+            [KeyboardButton(text="🛡 پاسخ اعتراضات")],
             [KeyboardButton(text="🎓 آموزش‌ها")],
             [KeyboardButton(text="❓ سوالات پرتکرار")]
         ]
@@ -137,6 +142,16 @@ def get_products_menu():
         [KeyboardButton(text="❓ افزودن سوال محصول")],
         [KeyboardButton(text="✏️ ویرایش محصول")],
         [KeyboardButton(text="📦 محصولات")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
+    ]
+
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def get_objections_menu():
+    buttons = [
+        [KeyboardButton(text="➕ افزودن پاسخ اعتراض")],
+        [KeyboardButton(text="🛡 پاسخ اعتراضات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ]
 
@@ -215,6 +230,30 @@ def parse_faq_text(text: str):
     return data
 
 
+def parse_objection_text(text: str):
+    data = {
+        "objection": "",
+        "answer": ""
+    }
+
+    lines = text.splitlines()
+
+    for line in lines:
+        if ":" not in line:
+            continue
+
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+
+        if key == "اعتراض":
+            data["objection"] = value
+        elif key == "پاسخ":
+            data["answer"] = value
+
+    return data
+
+
 def product_template(product):
     return (
         f"کد محصول: {product.get('code') or ''}\n"
@@ -258,7 +297,10 @@ async def back_to_main_menu_handler(message: Message):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
 
-    await message.answer("منوی اصلی:", reply_markup=get_menu(user["role"]))
+    await message.answer(
+        "منوی اصلی:",
+        reply_markup=get_menu(user["role"])
+    )
 
 
 @dp.message(F.text == "👥 مدیریت کاربران")
@@ -367,7 +409,67 @@ async def manage_products_handler(message: Message):
         await message.answer("⛔ شما دسترسی مدیریت محصولات ندارید.")
         return
 
-    await message.answer("📦 مدیریت محصولات", reply_markup=get_products_menu())
+    await message.answer(
+        "📦 مدیریت محصولات",
+        reply_markup=get_products_menu()
+    )
+
+
+@dp.message(F.text == "🛡 مدیریت اعتراضات")
+async def manage_objections_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی مدیریت اعتراضات ندارید.")
+        return
+
+    await message.answer(
+        "🛡 مدیریت اعتراضات",
+        reply_markup=get_objections_menu()
+    )
+
+
+@dp.message(F.text == "➕ افزودن پاسخ اعتراض")
+async def add_objection_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ثبت اعتراض ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    WAITING_OBJECTION_INPUT[message.from_user.id] = True
+
+    await message.answer(
+        "اعتراض و پاسخ را با همین قالب بفرست:\n\n"
+        "اعتراض: \n"
+        "پاسخ: "
+    )
+
+
+@dp.message(F.text == "🛡 پاسخ اعتراضات")
+async def objections_list_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+
+    objections = (
+        supabase.table("objection_answers")
+        .select("*")
+        .is_("product_id", "null")
+        .eq("is_active", True)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    if not objections.data:
+        await message.answer("هنوز پاسخی برای اعتراضات ثبت نشده است.")
+        return
+
+    text = "🛡 پاسخ اعتراضات مشتری:\n\n"
+
+    for item in objections.data:
+        text += f"اعتراض: {item.get('objection')}\n"
+        text += f"پاسخ: {item.get('answer')}\n"
+        text += "------------------\n"
+
+    await message.answer(text)
 
 
 @dp.message(F.text == "➕ افزودن محصول")
@@ -402,6 +504,7 @@ async def add_product_photo_handler(message: Message):
 
     clear_waiting_states(message.from_user.id)
     WAITING_PHOTO_CODE[message.from_user.id] = True
+
     await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
 
 
@@ -413,6 +516,7 @@ async def add_product_video_handler(message: Message):
 
     clear_waiting_states(message.from_user.id)
     WAITING_VIDEO_CODE[message.from_user.id] = True
+
     await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
 
 
@@ -424,6 +528,7 @@ async def add_product_catalog_handler(message: Message):
 
     clear_waiting_states(message.from_user.id)
     WAITING_CATALOG_CODE[message.from_user.id] = True
+
     await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
 
 
@@ -435,6 +540,7 @@ async def add_product_faq_handler(message: Message):
 
     clear_waiting_states(message.from_user.id)
     WAITING_FAQ_CODE[message.from_user.id] = True
+
     await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
 
 
@@ -446,6 +552,7 @@ async def edit_product_handler(message: Message):
 
     clear_waiting_states(message.from_user.id)
     WAITING_EDIT_CODE[message.from_user.id] = True
+
     await message.answer("کد محصول را بفرست.\n\nمثال:\n015")
 
 
@@ -499,19 +606,58 @@ async def product_detail_handler(message: Message):
 
     product = result.data[0]
 
-    photo = supabase.table("product_media").select("*").eq("product_id", product.get("id")).eq("media_type", "photo").limit(1).execute()
+    photo = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "photo")
+        .limit(1)
+        .execute()
+    )
+
     if photo.data:
-        await message.answer_photo(photo=photo.data[0].get("file_url"), caption=f"📦 {product.get('fa_name')}")
+        await message.answer_photo(
+            photo=photo.data[0].get("file_url"),
+            caption=f"📦 {product.get('fa_name')}"
+        )
 
-    video = supabase.table("product_media").select("*").eq("product_id", product.get("id")).eq("media_type", "video").limit(1).execute()
+    video = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "video")
+        .limit(1)
+        .execute()
+    )
+
     if video.data:
-        await message.answer_video(video=video.data[0].get("file_url"), caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}")
+        await message.answer_video(
+            video=video.data[0].get("file_url"),
+            caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}"
+        )
 
-    catalog = supabase.table("product_media").select("*").eq("product_id", product.get("id")).eq("media_type", "catalog").limit(1).execute()
+    catalog = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("media_type", "catalog")
+        .limit(1)
+        .execute()
+    )
+
     if catalog.data:
-        await message.answer_document(document=catalog.data[0].get("file_url"), caption=f"📄 کاتالوگ {product.get('fa_name')}")
+        await message.answer_document(
+            document=catalog.data[0].get("file_url"),
+            caption=f"📄 کاتالوگ {product.get('fa_name')}"
+        )
 
-    faqs = supabase.table("product_faqs").select("*").eq("product_id", product.get("id")).eq("is_active", True).execute()
+    faqs = (
+        supabase.table("product_faqs")
+        .select("*")
+        .eq("product_id", product.get("id"))
+        .eq("is_active", True)
+        .execute()
+    )
 
     text = f"📦 {product.get('fa_name')}\n\n"
     text += f"کد محصول: {product.get('code')}\n"
@@ -549,6 +695,7 @@ async def product_photo_file_handler(message: Message):
     }).execute()
 
     clear_waiting_states(message.from_user.id)
+
     await message.answer("✅ عکس محصول با موفقیت ثبت شد.")
 
 
@@ -568,6 +715,7 @@ async def product_video_file_handler(message: Message):
     }).execute()
 
     clear_waiting_states(message.from_user.id)
+
     await message.answer("✅ ویدئوی محصول با موفقیت ثبت شد.")
 
 
@@ -587,14 +735,41 @@ async def product_catalog_file_handler(message: Message):
     }).execute()
 
     clear_waiting_states(message.from_user.id)
+
     await message.answer("✅ کاتالوگ محصول با موفقیت ثبت شد.")
 
 
 @dp.message()
 async def text_handler(message: Message):
+    if WAITING_OBJECTION_INPUT.get(message.from_user.id):
+        objection_data = parse_objection_text(message.text)
+
+        if not objection_data["objection"] or not objection_data["answer"]:
+            await message.answer("❌ اعتراض و پاسخ هر دو الزامی هستند.")
+            return
+
+        supabase.table("objection_answers").insert({
+            "product_id": None,
+            "objection": objection_data["objection"],
+            "answer": objection_data["answer"],
+            "is_active": True
+        }).execute()
+
+        clear_waiting_states(message.from_user.id)
+
+        await message.answer("✅ پاسخ اعتراض با موفقیت ثبت شد.")
+        return
+
     if WAITING_PHOTO_CODE.get(message.from_user.id):
         code = message.text.strip()
-        product = supabase.table("products").select("*").eq("code", code).eq("is_active", True).execute()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
 
         if not product.data:
             await message.answer("❌ محصولی با این کد پیدا نشد.")
@@ -602,12 +777,20 @@ async def text_handler(message: Message):
 
         WAITING_PHOTO_CODE.pop(message.from_user.id, None)
         WAITING_PHOTO_FILE[message.from_user.id] = product.data[0]["id"]
+
         await message.answer("محصول پیدا شد ✅\nحالا عکس محصول را بفرست.")
         return
 
     if WAITING_VIDEO_CODE.get(message.from_user.id):
         code = message.text.strip()
-        product = supabase.table("products").select("*").eq("code", code).eq("is_active", True).execute()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
 
         if not product.data:
             await message.answer("❌ محصولی با این کد پیدا نشد.")
@@ -615,12 +798,20 @@ async def text_handler(message: Message):
 
         WAITING_VIDEO_CODE.pop(message.from_user.id, None)
         WAITING_VIDEO_FILE[message.from_user.id] = product.data[0]["id"]
+
         await message.answer("محصول پیدا شد ✅\nحالا ویدئوی محصول را بفرست.")
         return
 
     if WAITING_CATALOG_CODE.get(message.from_user.id):
         code = message.text.strip()
-        product = supabase.table("products").select("*").eq("code", code).eq("is_active", True).execute()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
 
         if not product.data:
             await message.answer("❌ محصولی با این کد پیدا نشد.")
@@ -628,12 +819,20 @@ async def text_handler(message: Message):
 
         WAITING_CATALOG_CODE.pop(message.from_user.id, None)
         WAITING_CATALOG_FILE[message.from_user.id] = product.data[0]["id"]
+
         await message.answer("محصول پیدا شد ✅\nحالا فایل کاتالوگ را بفرست.")
         return
 
     if WAITING_FAQ_CODE.get(message.from_user.id):
         code = message.text.strip()
-        product = supabase.table("products").select("*").eq("code", code).eq("is_active", True).execute()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
 
         if not product.data:
             await message.answer("❌ محصولی با این کد پیدا نشد.")
@@ -666,12 +865,20 @@ async def text_handler(message: Message):
         }).execute()
 
         clear_waiting_states(message.from_user.id)
+
         await message.answer("✅ سوال و پاسخ محصول ثبت شد.")
         return
 
     if WAITING_EDIT_CODE.get(message.from_user.id):
         code = message.text.strip()
-        product = supabase.table("products").select("*").eq("code", code).eq("is_active", True).execute()
+
+        product = (
+            supabase.table("products")
+            .select("*")
+            .eq("code", code)
+            .eq("is_active", True)
+            .execute()
+        )
 
         if not product.data:
             await message.answer("❌ محصولی با این کد پیدا نشد.")
@@ -700,9 +907,12 @@ async def text_handler(message: Message):
         try:
             supabase.table("products").update(product_data).eq("id", product_id).execute()
             clear_waiting_states(message.from_user.id)
+
             await message.answer("✅ محصول با موفقیت ویرایش شد.")
+
         except Exception:
             await message.answer("❌ خطا در ویرایش محصول.")
+
         return
 
     if WAITING_PRODUCT_INPUT.get(message.from_user.id):
@@ -721,6 +931,7 @@ async def text_handler(message: Message):
                 f"کد محصول: {product_data['code']}\n"
                 f"نام محصول: {product_data['fa_name']}"
             )
+
         except Exception:
             await message.answer("❌ خطا در ثبت محصول. احتمالاً کد محصول تکراری است.")
 
