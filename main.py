@@ -111,21 +111,21 @@ def get_menu(role: str):
         buttons = [
             [KeyboardButton(text="👥 مدیریت کاربران")],
             [KeyboardButton(text="📦 مدیریت محصولات")],
-            [KeyboardButton(text="🛡 مدیریت اعتراضات")],
+            [KeyboardButton(text="🛡 مدیریت ابجکشن‌ها")],
             [KeyboardButton(text="🎓 مدیریت آموزش‌ها")],
             [KeyboardButton(text="❓ سوالات بی‌جواب")]
         ]
     elif role == "content_contributor":
         buttons = [
             [KeyboardButton(text="📦 مدیریت محصولات")],
-            [KeyboardButton(text="🛡 مدیریت اعتراضات")],
-            [KeyboardButton(text="🎓 افزودن آموزش")],
+            [KeyboardButton(text="🛡 مدیریت ابجکشن‌ها")],
+            [KeyboardButton(text="🎓 مدیریت آموزش‌ها")],
             [KeyboardButton(text="📝 افزودن محتوا")]
         ]
     else:
         buttons = [
             [KeyboardButton(text="📦 محصولات")],
-            [KeyboardButton(text="🛡 پاسخ اعتراضات")],
+            [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
             [KeyboardButton(text="🎓 آموزش‌ها")],
             [KeyboardButton(text="❓ سوالات پرتکرار")]
         ]
@@ -150,8 +150,17 @@ def get_products_menu():
 
 def get_objections_menu():
     buttons = [
-        [KeyboardButton(text="➕ افزودن پاسخ اعتراض")],
-        [KeyboardButton(text="🛡 پاسخ اعتراضات")],
+        [KeyboardButton(text="➕ افزودن پاسخ ابجکشن")],
+        [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
+    ]
+
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def get_trainings_menu():
+    buttons = [
+        [KeyboardButton(text="🎓 آموزش‌ها")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ]
 
@@ -246,7 +255,7 @@ def parse_objection_text(text: str):
         key = key.strip()
         value = value.strip()
 
-        if key == "اعتراض":
+        if key in ["ابجکشن", "اعتراض"]:
             data["objection"] = value
         elif key == "پاسخ":
             data["answer"] = value
@@ -415,35 +424,193 @@ async def manage_products_handler(message: Message):
     )
 
 
-@dp.message(F.text == "🛡 مدیریت اعتراضات")
+@dp.message(F.text == "🛡 مدیریت ابجکشن‌ها")
 async def manage_objections_handler(message: Message):
     if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی مدیریت اعتراضات ندارید.")
+        await message.answer("⛔ شما دسترسی مدیریت ابجکشن‌ها ندارید.")
         return
 
     await message.answer(
-        "🛡 مدیریت اعتراضات",
+        "🛡 مدیریت ابجکشن‌ها",
         reply_markup=get_objections_menu()
     )
 
 
-@dp.message(F.text == "➕ افزودن پاسخ اعتراض")
+@dp.message(F.text == "🎓 مدیریت آموزش‌ها")
+async def manage_trainings_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی مدیریت آموزش‌ها ندارید.")
+        return
+
+    await message.answer(
+        "🎓 مدیریت آموزش‌ها",
+        reply_markup=get_trainings_menu()
+    )
+
+
+@dp.message(F.text == "🎓 آموزش‌ها")
+async def training_levels_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+
+    levels = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("is_active", True)
+        .order("level_number")
+        .execute()
+    )
+
+    if not levels.data:
+        await message.answer("هنوز سطح آموزشی ثبت نشده است.")
+        return
+
+    text = "🎓 مسیر آموزشی فوراور\n"
+    text += "از صفر تا نتورکر حرفه‌ای\n\n"
+
+    for item in levels.data:
+        text += f"سطح {item.get('level_number')}: {item.get('title')}\n"
+        text += f"{item.get('description') or ''}\n"
+        text += f"مشاهده مرحله‌ها: /level {item.get('level_number')}\n"
+        text += "------------------\n"
+
+    await message.answer(text)
+
+
+@dp.message(F.text.startswith("/level "))
+async def training_level_steps_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+
+    level_text = message.text.replace("/level ", "").strip()
+
+    if not level_text.isdigit():
+        await message.answer("❌ شماره سطح درست نیست.")
+        return
+
+    level_number = int(level_text)
+
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await message.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    level_item = level.data[0]
+
+    steps = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level_item.get("id"))
+        .eq("is_active", True)
+        .order("step_number")
+        .execute()
+    )
+
+    if not steps.data:
+        await message.answer("برای این سطح هنوز مرحله‌ای ثبت نشده است.")
+        return
+
+    text = f"🎓 سطح {level_item.get('level_number')}: {level_item.get('title')}\n\n"
+
+    for step in steps.data:
+        text += f"مرحله {step.get('step_number')}: {step.get('title')}\n"
+        text += f"مشاهده: /step {level_number} {step.get('step_number')}\n"
+        text += "------------------\n"
+
+    await message.answer(text)
+
+
+@dp.message(F.text.startswith("/step "))
+async def training_step_detail_handler(message: Message):
+    if not can_view_content(message.from_user.id):
+        await message.answer("⛔ حساب شما هنوز فعال نیست.")
+        return
+
+    parts = message.text.split()
+
+    if len(parts) != 3:
+        await message.answer("❌ دستور درست نیست. مثال:\n/step 1 1")
+        return
+
+    level_text = parts[1]
+    step_text = parts[2]
+
+    if not level_text.isdigit() or not step_text.isdigit():
+        await message.answer("❌ شماره سطح و مرحله باید عدد باشد.")
+        return
+
+    level_number = int(level_text)
+    step_number = int(step_text)
+
+    level = (
+        supabase.table("training_levels")
+        .select("*")
+        .eq("level_number", level_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not level.data:
+        await message.answer("❌ این سطح آموزشی پیدا نشد.")
+        return
+
+    step = (
+        supabase.table("training_steps")
+        .select("*")
+        .eq("level_id", level.data[0].get("id"))
+        .eq("step_number", step_number)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not step.data:
+        await message.answer("❌ این مرحله آموزشی پیدا نشد.")
+        return
+
+    item = step.data[0]
+
+    text = f"🎓 سطح {level_number} - مرحله {step_number}\n"
+    text += f"{item.get('title')}\n\n"
+    text += f"{item.get('content') or 'محتوای این آموزش بعداً تکمیل می‌شود.'}\n\n"
+
+    if item.get("title") == "پاسخ به ابجکشن‌ها":
+        text += "برای دیدن پاسخ‌های آماده، از منوی اصلی گزینه زیر را بزن:\n"
+        text += "🛡 پاسخ به ابجکشن‌ها\n\n"
+
+    text += "آزمون ۴ گزینه‌ای این مرحله در قدم بعدی اضافه می‌شود."
+
+    await message.answer(text)
+
+
+@dp.message(F.text == "➕ افزودن پاسخ ابجکشن")
 async def add_objection_handler(message: Message):
     if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ثبت اعتراض ندارید.")
+        await message.answer("⛔ شما دسترسی ثبت ابجکشن ندارید.")
         return
 
     clear_waiting_states(message.from_user.id)
     WAITING_OBJECTION_INPUT[message.from_user.id] = True
 
     await message.answer(
-        "اعتراض و پاسخ را با همین قالب بفرست:\n\n"
-        "اعتراض: \n"
+        "ابجکشن و پاسخ را با همین قالب بفرست:\n\n"
+        "ابجکشن: \n"
         "پاسخ: "
     )
 
 
-@dp.message(F.text == "🛡 پاسخ اعتراضات")
+@dp.message(F.text == "🛡 پاسخ به ابجکشن‌ها")
 async def objections_list_handler(message: Message):
     if not can_view_content(message.from_user.id):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
@@ -459,13 +626,13 @@ async def objections_list_handler(message: Message):
     )
 
     if not objections.data:
-        await message.answer("هنوز پاسخی برای اعتراضات ثبت نشده است.")
+        await message.answer("هنوز پاسخی برای ابجکشن‌ها ثبت نشده است.")
         return
 
-    text = "🛡 پاسخ اعتراضات مشتری:\n\n"
+    text = "🛡 پاسخ به ابجکشن‌ها:\n\n"
 
     for item in objections.data:
-        text += f"اعتراض: {item.get('objection')}\n"
+        text += f"ابجکشن: {item.get('objection')}\n"
         text += f"پاسخ: {item.get('answer')}\n"
         text += "------------------\n"
 
@@ -745,7 +912,7 @@ async def text_handler(message: Message):
         objection_data = parse_objection_text(message.text)
 
         if not objection_data["objection"] or not objection_data["answer"]:
-            await message.answer("❌ اعتراض و پاسخ هر دو الزامی هستند.")
+            await message.answer("❌ ابجکشن و پاسخ هر دو الزامی هستند.")
             return
 
         supabase.table("objection_answers").insert({
@@ -757,7 +924,7 @@ async def text_handler(message: Message):
 
         clear_waiting_states(message.from_user.id)
 
-        await message.answer("✅ پاسخ اعتراض با موفقیت ثبت شد.")
+        await message.answer("✅ پاسخ ابجکشن با موفقیت ثبت شد.")
         return
 
     if WAITING_PHOTO_CODE.get(message.from_user.id):
