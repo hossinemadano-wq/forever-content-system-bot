@@ -1504,12 +1504,12 @@ async def start_handler(message: Message):
 
     if not user.get("is_active"):
         await message.answer(
-        "سلام 👋\n"
-        "ثبت‌نام شما در ربات انجام شد.\n\n"
-        "⏳ حساب شما هنوز توسط ادمین تأیید نشده است.\n\n"
-        "بعد از اینکه ادمین حساب شما را تأیید کرد، لطفاً دوباره روی /start بزنید تا منوی اصلی برای شما فعال شود."
-    )
-    return
+            "سلام 👋\n"
+            "ثبت‌نام شما در ربات انجام شد.\n\n"
+            "⏳ حساب شما هنوز توسط ادمین تأیید نشده است.\n\n"
+            "بعد از اینکه ادمین حساب شما را تأیید کرد، لطفاً دوباره روی /start بزنید تا منوی اصلی برای شما فعال شود."
+        )
+        return
 
     if user.get("role") == "content_contributor":
         await send_editor_guide(message)
