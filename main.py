@@ -23,6 +23,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 VALID_ROLES = ["approved_customer", "content_contributor", "admin"]
+PRODUCT_LIST_PAGE_SIZE = 20
 
 # همه حالت‌های انتظار اینجا نگهداری می‌شود
 USER_STATE = {}
@@ -295,7 +296,7 @@ def product_template(product):
     )
 
 
-def get_products_keyboard(products, action: str = "view"):
+def get_products_keyboard(products, action: str = "view", page: int = 0, total_count: int = 0):
     buttons = []
 
     for item in products:
@@ -306,12 +307,143 @@ def get_products_keyboard(products, action: str = "view"):
             )
         ])
 
+    navigation_buttons = []
+
+    if page > 0:
+        navigation_buttons.append(
+            InlineKeyboardButton(
+                text="⬅️ صفحه قبل",
+                callback_data=f"product_page:{action}:{page - 1}",
+            )
+        )
+
+    if (page + 1) * PRODUCT_LIST_PAGE_SIZE < total_count:
+        navigation_buttons.append(
+            InlineKeyboardButton(
+                text="صفحه بعد ➡️",
+                callback_data=f"product_page:{action}:{page + 1}",
+            )
+        )
+
+    if navigation_buttons:
+        buttons.append(navigation_buttons)
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_product_detail_keyboard():
-    buttons = [[InlineKeyboardButton(text="🔙 بازگشت به محصولات", callback_data="products_list")]]
+def clean_product_text(value, limit: int = 350):
+    text = " ".join(str(value or "").split())
+    if not text:
+        return "برای دیدن اطلاعات کامل محصول، از دکمه‌های زیر استفاده کن."
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def get_product_overview_text(product):
+    intro = product.get("intro_text") or product.get("benefits") or product.get("features")
+
+    text = f"📦 {product.get('fa_name') or 'محصول'}\n\n"
+    text += f"کد محصول: {product.get('code') or '-'}\n"
+    text += f"نام انگلیسی: {product.get('en_name') or '-'}\n"
+    text += f"حجم: {product.get('volume') or '-'}\n"
+    text += f"دسته‌بندی: {product.get('category') or '-'}\n\n"
+    text += "معرفی کوتاه:\n"
+    text += f"{clean_product_text(intro)}\n\n"
+    text += "👇 برای دیدن بخش‌های مختلف محصول، یکی از گزینه‌های زیر را انتخاب کن:"
+
+    return text
+
+
+def get_product_full_info_text(product):
+    text = "📖 اطلاعات کامل محصول\n\n"
+    text += f"📦 {product.get('fa_name') or '-'}\n\n"
+    text += f"کد محصول: {product.get('code') or '-'}\n"
+    text += f"نام انگلیسی: {product.get('en_name') or '-'}\n"
+    text += f"حجم: {product.get('volume') or '-'}\n"
+    text += f"دسته‌بندی: {product.get('category') or '-'}\n\n"
+    text += f"ویژگی‌ها:\n{product.get('features') or '-'}\n\n"
+    text += f"مزایا:\n{product.get('benefits') or '-'}\n\n"
+    text += f"نحوه استفاده:\n{product.get('usage_method') or '-'}\n\n"
+    text += f"نکات مهم:\n{product.get('important_notes') or '-'}\n\n"
+    text += f"متن معرفی:\n{product.get('intro_text') or '-'}"
+
+    return text
+
+
+def get_product_page_keyboard(code: str, has_video: bool = False, has_catalog: bool = False, has_faqs: bool = False):
+    buttons = [
+        [InlineKeyboardButton(text="📖 اطلاعات کامل محصول", callback_data=f"product_section:full:{code}")],
+    ]
+
+    if has_faqs:
+        buttons.append([InlineKeyboardButton(text="❓ سوالات پرتکرار محصول", callback_data=f"product_section:faq:{code}")])
+
+    if has_video:
+        buttons.append([InlineKeyboardButton(text="🎥 ویدئوی محصول", callback_data=f"product_section:video:{code}")])
+
+    if has_catalog:
+        buttons.append([InlineKeyboardButton(text="📄 کاتالوگ محصول", callback_data=f"product_section:catalog:{code}")])
+
+    buttons.append([InlineKeyboardButton(text="🔙 بازگشت به محصولات", callback_data="products_list")])
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_product_back_keyboard(code: str):
+    buttons = [
+        [InlineKeyboardButton(text="🔙 بازگشت به صفحه محصول", callback_data=f"product_action:view:{code}")],
+        [InlineKeyboardButton(text="📦 بازگشت به محصولات", callback_data="products_list")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_product_media(product_id: str, media_type: str):
+    result = (
+        supabase.table("product_media")
+        .select("*")
+        .eq("product_id", product_id)
+        .eq("media_type", media_type)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def get_product_faqs(product_id: str):
+    result = (
+        supabase.table("product_faqs")
+        .select("*")
+        .eq("product_id", product_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    return result.data or []
+
+
+async def answer_long_text(target, text: str, reply_markup=None):
+    text = str(text or "")
+
+    if len(text) <= 3900:
+        await target.answer(text, reply_markup=reply_markup)
+        return
+
+    chunks = []
+    current = ""
+
+    for line in text.splitlines(True):
+        if len(current) + len(line) > 3900:
+            chunks.append(current)
+            current = line
+        else:
+            current += line
+
+    if current:
+        chunks.append(current)
+
+    for index, chunk in enumerate(chunks):
+        is_last = index == len(chunks) - 1
+        await target.answer(chunk, reply_markup=reply_markup if is_last else None)
 
 
 def get_training_levels_keyboard(levels, callback_prefix: str = "training_level"):
@@ -473,7 +605,7 @@ async def send_admin_user_detail(target, telegram_id: int):
     await target.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
-async def send_products_list(target, action: str = "view"):
+async def send_products_list(target, action: str = "view", page: int = 0):
     products = (
         supabase.table("products")
         .select("*")
@@ -486,8 +618,15 @@ async def send_products_list(target, action: str = "view"):
         await target.answer("هنوز محصولی ثبت نشده است.")
         return
 
+    total_count = len(products.data)
+    max_page = max((total_count - 1) // PRODUCT_LIST_PAGE_SIZE, 0)
+    page = max(0, min(page, max_page))
+    start_index = page * PRODUCT_LIST_PAGE_SIZE
+    end_index = start_index + PRODUCT_LIST_PAGE_SIZE
+    page_products = products.data[start_index:end_index]
+
     titles = {
-        "view": "📦 لیست محصولات\n\nبرای دیدن اطلاعات کامل، روی محصول موردنظر بزن:",
+        "view": "📦 لیست محصولات\n\nبرای باز کردن صفحه محصول، روی محصول موردنظر بزن:",
         "photo": "🖼 افزودن عکس محصول\n\nمحصول را انتخاب کن:",
         "video": "🎥 افزودن ویدئو محصول\n\nمحصول را انتخاب کن:",
         "catalog": "📄 افزودن کاتالوگ محصول\n\nمحصول را انتخاب کن:",
@@ -495,89 +634,139 @@ async def send_products_list(target, action: str = "view"):
         "edit": "✏️ ویرایش محصول\n\nمحصول را انتخاب کن:",
     }
 
+    page_text = f"\n\nصفحه {page + 1} از {max_page + 1}"
+
     await target.answer(
-        titles.get(action, "محصول را انتخاب کن:"),
-        reply_markup=get_products_keyboard(products.data, action),
+        titles.get(action, "محصول را انتخاب کن:") + page_text,
+        reply_markup=get_products_keyboard(page_products, action, page, total_count),
     )
 
 
-async def send_product_detail(target, code: str):
+async def get_product_by_code(code: str):
     result = (
         supabase.table("products")
         .select("*")
         .eq("code", code)
         .eq("is_active", True)
+        .limit(1)
         .execute()
     )
+    return result.data[0] if result.data else None
 
-    if not result.data:
+
+async def send_product_detail(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
         await target.answer("❌ محصولی با این کد پیدا نشد.")
         return
 
-    product = result.data[0]
+    photo = get_product_media(product.get("id"), "photo")
+    video = get_product_media(product.get("id"), "video")
+    catalog = get_product_media(product.get("id"), "catalog")
+    faqs = get_product_faqs(product.get("id"))
 
-    photo = (
-        supabase.table("product_media")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("media_type", "photo")
-        .limit(1)
-        .execute()
+    text = get_product_overview_text(product)
+    keyboard = get_product_page_keyboard(
+        code,
+        has_video=bool(video),
+        has_catalog=bool(catalog),
+        has_faqs=bool(faqs),
     )
 
-    if photo.data:
-        await target.answer_photo(photo=photo.data[0].get("file_url"), caption=f"📦 {product.get('fa_name')}")
+    if photo:
+        await target.answer_photo(
+            photo=photo.get("file_url"),
+            caption=text[:1000],
+            reply_markup=keyboard,
+        )
+        return
 
-    video = (
-        supabase.table("product_media")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("media_type", "video")
-        .limit(1)
-        .execute()
+    await target.answer(text, reply_markup=keyboard)
+
+
+async def send_product_full_info(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    await answer_long_text(target, get_product_full_info_text(product), reply_markup=get_product_back_keyboard(code))
+
+
+async def send_product_faqs(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    faqs = get_product_faqs(product.get("id"))
+
+    if not faqs:
+        await target.answer(
+            "❓ سوالات پرتکرار محصول\n\n"
+            "برای این محصول هنوز سوال پرتکراری ثبت نشده است.",
+            reply_markup=get_product_back_keyboard(code),
+        )
+        return
+
+    text = f"❓ سوالات پرتکرار محصول\n\n📦 {product.get('fa_name') or '-'}\n\n"
+
+    for index, faq in enumerate(faqs, start=1):
+        text += f"{index}. سوال: {faq.get('question') or '-'}\n"
+        text += f"پاسخ: {faq.get('answer') or '-'}\n\n"
+
+    await answer_long_text(target, text, reply_markup=get_product_back_keyboard(code))
+
+
+async def send_product_video(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    video = get_product_media(product.get("id"), "video")
+
+    if not video:
+        await target.answer(
+            "🎥 ویدئوی محصول\n\n"
+            "برای این محصول هنوز ویدئو ثبت نشده است.",
+            reply_markup=get_product_back_keyboard(code),
+        )
+        return
+
+    await target.answer_video(
+        video=video.get("file_url"),
+        caption=f"🎥 ویدئوی محصول: {product.get('fa_name') or '-'}",
+        reply_markup=get_product_back_keyboard(code),
     )
 
-    if video.data:
-        await target.answer_video(video=video.data[0].get("file_url"), caption=f"🎥 ویدئوی معرفی {product.get('fa_name')}")
 
-    catalog = (
-        supabase.table("product_media")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("media_type", "catalog")
-        .limit(1)
-        .execute()
+async def send_product_catalog(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    catalog = get_product_media(product.get("id"), "catalog")
+
+    if not catalog:
+        await target.answer(
+            "📄 کاتالوگ محصول\n\n"
+            "برای این محصول هنوز کاتالوگ ثبت نشده است.",
+            reply_markup=get_product_back_keyboard(code),
+        )
+        return
+
+    await target.answer_document(
+        document=catalog.get("file_url"),
+        caption=f"📄 کاتالوگ محصول: {product.get('fa_name') or '-'}",
+        reply_markup=get_product_back_keyboard(code),
     )
-
-    if catalog.data:
-        await target.answer_document(document=catalog.data[0].get("file_url"), caption=f"📄 کاتالوگ {product.get('fa_name')}")
-
-    faqs = (
-        supabase.table("product_faqs")
-        .select("*")
-        .eq("product_id", product.get("id"))
-        .eq("is_active", True)
-        .execute()
-    )
-
-    text = f"📦 {product.get('fa_name')}\n\n"
-    text += f"کد محصول: {product.get('code')}\n"
-    text += f"نام انگلیسی: {product.get('en_name') or '-'}\n"
-    text += f"حجم: {product.get('volume') or '-'}\n"
-    text += f"دسته‌بندی: {product.get('category') or '-'}\n\n"
-    text += f"ویژگی‌ها:\n{product.get('features') or '-'}\n\n"
-    text += f"مزایا:\n{product.get('benefits') or '-'}\n\n"
-    text += f"نحوه استفاده:\n{product.get('usage_method') or '-'}\n\n"
-    text += f"نکات مهم:\n{product.get('important_notes') or '-'}\n\n"
-    text += f"متن معرفی:\n{product.get('intro_text') or '-'}\n\n"
-
-    if faqs.data:
-        text += "❓ سوالات پرتکرار:\n\n"
-        for faq in faqs.data:
-            text += f"سوال: {faq.get('question')}\n"
-            text += f"پاسخ: {faq.get('answer')}\n\n"
-
-    await target.answer(text, reply_markup=get_product_detail_keyboard())
 
 
 async def get_level_by_number(level_number: int):
@@ -1765,7 +1954,64 @@ async def products_list_callback(callback: CallbackQuery):
         await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
         return
     await callback.answer()
-    await send_products_list(callback.message, "view")
+    await send_products_list(callback.message, "view", 0)
+
+
+@dp.callback_query(F.data.startswith("product_page:"))
+async def product_page_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await callback.answer("اطلاعات صفحه درست نیست.", show_alert=True)
+        return
+
+    action = parts[1]
+    page = int(parts[2])
+
+    if action == "view":
+        if not can_view_content(callback.from_user.id):
+            await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+            return
+    elif not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی مدیریت محصولات ندارید.", show_alert=True)
+        return
+
+    await callback.answer()
+    await send_products_list(callback.message, action, page)
+
+
+@dp.callback_query(F.data.startswith("product_section:"))
+async def product_section_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("اطلاعات محصول درست نیست.", show_alert=True)
+        return
+
+    section = parts[1]
+    code = parts[2]
+
+    await callback.answer()
+
+    if section == "full":
+        await send_product_full_info(callback.message, code)
+        return
+
+    if section == "faq":
+        await send_product_faqs(callback.message, code)
+        return
+
+    if section == "video":
+        await send_product_video(callback.message, code)
+        return
+
+    if section == "catalog":
+        await send_product_catalog(callback.message, code)
+        return
+
+    await send_product_detail(callback.message, code)
 
 
 @dp.callback_query(F.data.startswith("product_action:"))
