@@ -157,6 +157,7 @@ def get_products_menu():
         [KeyboardButton(text="📄 افزودن کاتالوگ محصول")],
         [KeyboardButton(text="❓ افزودن سوال محصول")],
         [KeyboardButton(text="📲 افزودن/ویرایش کپشن و استوری محصول")],
+        [KeyboardButton(text="💬 افزودن/ویرایش فیدبک محصول")],
         [KeyboardButton(text="✏️ ویرایش محصول")],
         [KeyboardButton(text="📦 محصولات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
@@ -387,6 +388,7 @@ def get_product_page_keyboard(code: str, has_video: bool = False, has_catalog: b
         buttons.append([InlineKeyboardButton(text="📄 کاتالوگ محصول", callback_data=f"product_section:catalog:{code}")])
 
     buttons.append([InlineKeyboardButton(text="📲 کپشن و استوری محصول", callback_data=f"product_section:story:{code}")])
+    buttons.append([InlineKeyboardButton(text="💬 فیدبک محصول", callback_data=f"product_section:feedback:{code}")])
     buttons.append([InlineKeyboardButton(text="🔙 بازگشت به محصولات", callback_data="products_list")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -634,6 +636,7 @@ async def send_products_list(target, action: str = "view", page: int = 0):
         "catalog": "📄 افزودن کاتالوگ محصول\n\nمحصول را انتخاب کن:",
         "faq": "❓ افزودن سوال محصول\n\nمحصول را انتخاب کن:",
         "story": "📲 افزودن/ویرایش کپشن و استوری محصول\n\nمحصول را انتخاب کن:",
+        "feedback": "💬 افزودن/ویرایش فیدبک محصول\n\nمحصول را انتخاب کن:",
         "edit": "✏️ ویرایش محصول\n\nمحصول را انتخاب کن:",
     }
 
@@ -794,6 +797,40 @@ async def send_product_story_caption(target, code: str):
     text += f"📦 {product.get('fa_name') or '-'}\n"
     text += f"کد محصول: {product.get('code') or '-'}\n\n"
     text += story_caption
+
+    await answer_long_text(target, text, reply_markup=get_product_back_keyboard(code))
+
+
+PRODUCT_FEEDBACK_WARNING = (
+    "\n\n⚠️ توجه:\n"
+    "این موارد فیدبک و تجربه مصرف‌کنندگان است و به معنی درمان، پیشگیری یا تشخیص بیماری نیست. "
+    "نتیجه مصرف برای افراد مختلف می‌تواند متفاوت باشد. در صورت داشتن بیماری یا مصرف دارو، با پزشک مشورت کنید."
+)
+
+
+async def send_product_feedback(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    feedback_text = (product.get("product_feedback") or "").strip()
+
+    if not feedback_text:
+        await target.answer(
+            "💬 فیدبک محصول\n\n"
+            f"📦 {product.get('fa_name') or '-'}\n\n"
+            "برای این محصول هنوز فیدبکی ثبت نشده است.",
+            reply_markup=get_product_back_keyboard(code),
+        )
+        return
+
+    text = "💬 فیدبک محصول\n\n"
+    text += f"📦 {product.get('fa_name') or '-'}\n"
+    text += f"کد محصول: {product.get('code') or '-'}\n\n"
+    text += feedback_text
+    text += PRODUCT_FEEDBACK_WARNING
 
     await answer_long_text(target, text, reply_markup=get_product_back_keyboard(code))
 
@@ -1444,6 +1481,7 @@ async def send_global_search_result(target, keyword: str):
                 product.get("important_notes"),
                 product.get("intro_text"),
                 product.get("story_caption"),
+                product.get("product_feedback"),
             ], keyword):
                 product_matches.append(product)
 
@@ -1972,6 +2010,15 @@ async def edit_product_story_caption_handler(message: Message):
     await send_products_list(message, "story")
 
 
+@dp.message(F.text == "💬 افزودن/ویرایش فیدبک محصول")
+async def edit_product_feedback_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش فیدبک محصول ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_products_list(message, "feedback")
+
+
 @dp.message(F.text == "✏️ ویرایش محصول")
 async def edit_product_handler(message: Message):
     if not can_manage_content(message.from_user.id):
@@ -2054,6 +2101,10 @@ async def product_section_callback(callback: CallbackQuery):
 
     if section == "story":
         await send_product_story_caption(callback.message, code)
+        return
+
+    if section == "feedback":
+        await send_product_feedback(callback.message, code)
         return
 
     await send_product_detail(callback.message, code)
@@ -2150,6 +2201,30 @@ async def product_action_callback(callback: CallbackQuery):
             "استوری ۳:\n\n"
             "کپشن:\n\n"
             "هشتگ‌ها:\n\n"
+            "برای پاک کردن این بخش، فقط کلمه حذف را بفرست."
+        )
+        return
+
+    if action == "feedback":
+        set_state(callback.from_user.id, "product_feedback", {
+            "product_id": item.get("id"),
+            "product_code": item.get("code"),
+            "product_name": item.get("fa_name"),
+        })
+
+        current_feedback = (item.get("product_feedback") or "").strip()
+        current_text = current_feedback if current_feedback else "برای این محصول هنوز فیدبکی ثبت نشده است."
+
+        await callback.message.answer(
+            f"✅ محصول انتخاب شد: {item.get('fa_name')}\n\n"
+            "متن فعلی فیدبک محصول:\n"
+            f"{current_text}\n\n"
+            "حالا متن جدید فیدبک محصول را بفرست.\n\n"
+            "پیشنهاد قالب:\n\n"
+            "فیدبک ۱:\n"
+            "فیدبک ۲:\n"
+            "فیدبک ۳:\n\n"
+            "نکته مهم: از نوشتن ادعای درمان قطعی بیماری خودداری کن.\n\n"
             "برای پاک کردن این بخش، فقط کلمه حذف را بفرست."
         )
         return
@@ -3096,6 +3171,40 @@ async def text_handler(message: Message):
                 "❌ خطا در ثبت کپشن و استوری محصول.\n\n"
                 "اگر این خطا را دیدی، یک‌بار این SQL را در Supabase اجرا کن:\n"
                 "alter table products add column if not exists story_caption text;"
+            )
+        return
+
+    if state_type == "product_feedback":
+        feedback_text = message.text.strip()
+
+        if not feedback_text:
+            await message.answer("❌ متن فیدبک محصول نمی‌تواند خالی باشد.")
+            return
+
+        try:
+            if feedback_text in ["حذف", "پاک", "پاک کردن", "حذف شود"]:
+                supabase.table("products").update({
+                    "product_feedback": None,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", state["product_id"]).execute()
+
+                clear_waiting_states(message.from_user.id)
+                await message.answer(f"✅ فیدبک محصول {state['product_name']} پاک شد.")
+                return
+
+            supabase.table("products").update({
+                "product_feedback": feedback_text,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", state["product_id"]).execute()
+
+            clear_waiting_states(message.from_user.id)
+            await message.answer(f"✅ فیدبک محصول {state['product_name']} با موفقیت ثبت شد.")
+
+        except Exception:
+            await message.answer(
+                "❌ خطا در ثبت فیدبک محصول.\n\n"
+                "اگر این خطا را دیدی، یک‌بار این SQL را در Supabase اجرا کن:\n"
+                "alter table products add column if not exists product_feedback text;"
             )
         return
 
