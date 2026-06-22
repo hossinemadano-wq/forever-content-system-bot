@@ -156,6 +156,7 @@ def get_products_menu():
         [KeyboardButton(text="🎥 افزودن ویدئو محصول")],
         [KeyboardButton(text="📄 افزودن کاتالوگ محصول")],
         [KeyboardButton(text="❓ افزودن سوال محصول")],
+        [KeyboardButton(text="📲 افزودن/ویرایش کپشن و استوری محصول")],
         [KeyboardButton(text="✏️ ویرایش محصول")],
         [KeyboardButton(text="📦 محصولات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
@@ -385,6 +386,7 @@ def get_product_page_keyboard(code: str, has_video: bool = False, has_catalog: b
     if has_catalog:
         buttons.append([InlineKeyboardButton(text="📄 کاتالوگ محصول", callback_data=f"product_section:catalog:{code}")])
 
+    buttons.append([InlineKeyboardButton(text="📲 کپشن و استوری محصول", callback_data=f"product_section:story:{code}")])
     buttons.append([InlineKeyboardButton(text="🔙 بازگشت به محصولات", callback_data="products_list")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -631,6 +633,7 @@ async def send_products_list(target, action: str = "view", page: int = 0):
         "video": "🎥 افزودن ویدئو محصول\n\nمحصول را انتخاب کن:",
         "catalog": "📄 افزودن کاتالوگ محصول\n\nمحصول را انتخاب کن:",
         "faq": "❓ افزودن سوال محصول\n\nمحصول را انتخاب کن:",
+        "story": "📲 افزودن/ویرایش کپشن و استوری محصول\n\nمحصول را انتخاب کن:",
         "edit": "✏️ ویرایش محصول\n\nمحصول را انتخاب کن:",
     }
 
@@ -767,6 +770,32 @@ async def send_product_catalog(target, code: str):
         caption=f"📄 کاتالوگ محصول: {product.get('fa_name') or '-'}",
         reply_markup=get_product_back_keyboard(code),
     )
+
+
+async def send_product_story_caption(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    story_caption = (product.get("story_caption") or "").strip()
+
+    if not story_caption:
+        await target.answer(
+            "📲 کپشن و استوری محصول\n\n"
+            f"📦 {product.get('fa_name') or '-'}\n\n"
+            "برای این محصول هنوز کپشن و محتوای استوری ثبت نشده است.",
+            reply_markup=get_product_back_keyboard(code),
+        )
+        return
+
+    text = "📲 کپشن و استوری محصول\n\n"
+    text += f"📦 {product.get('fa_name') or '-'}\n"
+    text += f"کد محصول: {product.get('code') or '-'}\n\n"
+    text += story_caption
+
+    await answer_long_text(target, text, reply_markup=get_product_back_keyboard(code))
 
 
 async def get_level_by_number(level_number: int):
@@ -1414,6 +1443,7 @@ async def send_global_search_result(target, keyword: str):
                 product.get("usage_method"),
                 product.get("important_notes"),
                 product.get("intro_text"),
+                product.get("story_caption"),
             ], keyword):
                 product_matches.append(product)
 
@@ -1609,6 +1639,7 @@ EDITOR_GUIDE_PARTS = [
 🎥 ویدئو محصول اضافه کنید
 📄 کاتالوگ محصول اضافه کنید
 ❓ سوالات پرتکرار محصول اضافه کنید
+📲 کپشن و متن استوری محصول اضافه یا ویرایش کنید
 ✏️ محصول را ویرایش کنید
 
 نکته مهم:
@@ -1665,6 +1696,7 @@ EDITOR_GUIDE_PARTS = [
 🎓 آموزش درست باز شود
 📄 فایل PDF یا ویدئو اشتباه نباشد
 ❓ سوال و پاسخ درست ثبت شده باشد
+📲 کپشن و استوری محصول درست نمایش داده شود
 🔎 با جستجو قابل پیدا شدن باشد""",
 
     """✅ قوانین مهم ویراستار
@@ -1931,6 +1963,15 @@ async def add_product_faq_handler(message: Message):
     await send_products_list(message, "faq")
 
 
+@dp.message(F.text == "📲 افزودن/ویرایش کپشن و استوری محصول")
+async def edit_product_story_caption_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش کپشن و استوری محصول ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_products_list(message, "story")
+
+
 @dp.message(F.text == "✏️ ویرایش محصول")
 async def edit_product_handler(message: Message):
     if not can_manage_content(message.from_user.id):
@@ -2011,6 +2052,10 @@ async def product_section_callback(callback: CallbackQuery):
         await send_product_catalog(callback.message, code)
         return
 
+    if section == "story":
+        await send_product_story_caption(callback.message, code)
+        return
+
     await send_product_detail(callback.message, code)
 
 
@@ -2081,6 +2126,31 @@ async def product_action_callback(callback: CallbackQuery):
             "حالا سوال و پاسخ را با این قالب بفرست:\n\n"
             "سوال: \n"
             "پاسخ: "
+        )
+        return
+
+    if action == "story":
+        set_state(callback.from_user.id, "product_story_caption", {
+            "product_id": item.get("id"),
+            "product_code": item.get("code"),
+            "product_name": item.get("fa_name"),
+        })
+
+        current_story = (item.get("story_caption") or "").strip()
+        current_text = current_story if current_story else "برای این محصول هنوز کپشن و استوری ثبت نشده است."
+
+        await callback.message.answer(
+            f"✅ محصول انتخاب شد: {item.get('fa_name')}\n\n"
+            "متن فعلی کپشن و استوری:\n"
+            f"{current_text}\n\n"
+            "حالا متن جدید کپشن و استوری را بفرست.\n\n"
+            "پیشنهاد قالب:\n\n"
+            "استوری ۱:\n"
+            "استوری ۲:\n"
+            "استوری ۳:\n\n"
+            "کپشن:\n\n"
+            "هشتگ‌ها:\n\n"
+            "برای پاک کردن این بخش، فقط کلمه حذف را بفرست."
         )
         return
 
@@ -2993,6 +3063,40 @@ async def text_handler(message: Message):
 
         clear_waiting_states(message.from_user.id)
         await message.answer("✅ پاسخ ابجکشن با موفقیت ثبت شد.")
+        return
+
+    if state_type == "product_story_caption":
+        story_text = message.text.strip()
+
+        if not story_text:
+            await message.answer("❌ متن کپشن و استوری نمی‌تواند خالی باشد.")
+            return
+
+        try:
+            if story_text in ["حذف", "پاک", "پاک کردن", "حذف شود"]:
+                supabase.table("products").update({
+                    "story_caption": None,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", state["product_id"]).execute()
+
+                clear_waiting_states(message.from_user.id)
+                await message.answer(f"✅ کپشن و استوری محصول {state['product_name']} پاک شد.")
+                return
+
+            supabase.table("products").update({
+                "story_caption": story_text,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", state["product_id"]).execute()
+
+            clear_waiting_states(message.from_user.id)
+            await message.answer(f"✅ کپشن و استوری محصول {state['product_name']} با موفقیت ثبت شد.")
+
+        except Exception:
+            await message.answer(
+                "❌ خطا در ثبت کپشن و استوری محصول.\n\n"
+                "اگر این خطا را دیدی، یک‌بار این SQL را در Supabase اجرا کن:\n"
+                "alter table products add column if not exists story_caption text;"
+            )
         return
 
     if state_type == "product_faq":
