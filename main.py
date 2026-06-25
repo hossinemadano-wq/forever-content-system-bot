@@ -158,6 +158,7 @@ def get_products_menu():
         [KeyboardButton(text="❓ افزودن سوال محصول")],
         [KeyboardButton(text="📲 افزودن/ویرایش کپشن و استوری محصول")],
         [KeyboardButton(text="💬 افزودن/ویرایش فیدبک محصول")],
+        [KeyboardButton(text="🎁 افزودن/ویرایش محصولات داخل پک")],
         [KeyboardButton(text="✏️ ویرایش محصول")],
         [KeyboardButton(text="📦 محصولات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
@@ -168,6 +169,7 @@ def get_products_menu():
 def get_objections_menu():
     buttons = [
         [KeyboardButton(text="➕ افزودن پاسخ ابجکشن")],
+        [KeyboardButton(text="🎙 افزودن/ویرایش وویس ابجکشن")],
         [KeyboardButton(text="🛡 پاسخ به ابجکشن‌ها")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
     ]
@@ -373,7 +375,13 @@ def get_product_full_info_text(product):
     return text
 
 
-def get_product_page_keyboard(code: str, has_video: bool = False, has_catalog: bool = False, has_faqs: bool = False):
+def get_product_page_keyboard(
+    code: str,
+    has_video: bool = False,
+    has_catalog: bool = False,
+    has_faqs: bool = False,
+    has_pack_items: bool = False,
+):
     buttons = [
         [InlineKeyboardButton(text="📖 اطلاعات کامل محصول", callback_data=f"product_section:full:{code}")],
     ]
@@ -386,6 +394,9 @@ def get_product_page_keyboard(code: str, has_video: bool = False, has_catalog: b
 
     if has_catalog:
         buttons.append([InlineKeyboardButton(text="📄 کاتالوگ محصول", callback_data=f"product_section:catalog:{code}")])
+
+    if has_pack_items:
+        buttons.append([InlineKeyboardButton(text="🎁 محصولات داخل پک", callback_data=f"product_section:pack:{code}")])
 
     buttons.append([InlineKeyboardButton(text="📲 کپشن و استوری محصول", callback_data=f"product_section:story:{code}")])
     buttons.append([InlineKeyboardButton(text="💬 فیدبک محصول", callback_data=f"product_section:feedback:{code}")])
@@ -544,6 +555,84 @@ def build_objections_text():
     return text
 
 
+def get_objection_keyboard(items, action: str = "view"):
+    buttons = []
+
+    for item in items:
+        objection_text = short_text(item.get("objection"), 45)
+        voice_mark = "🎙 " if item.get("voice_file_id") else ""
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{voice_mark}{objection_text}",
+                callback_data=f"objection_action:{action}:{item.get('id')}",
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_objection_back_keyboard():
+    buttons = [
+        [InlineKeyboardButton(text="🔙 بازگشت به ابجکشن‌ها", callback_data="objections_list")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def send_objections_list(target, action: str = "view"):
+    objections = (
+        supabase.table("objection_answers")
+        .select("*")
+        .is_("product_id", "null")
+        .eq("is_active", True)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    if not objections.data:
+        await target.answer("هنوز پاسخی برای ابجکشن‌ها ثبت نشده است.")
+        return
+
+    titles = {
+        "view": "🛡 پاسخ به ابجکشن‌ها\n\nبرای دیدن پاسخ کامل، روی ابجکشن بزن:",
+        "voice": "🎙 افزودن/ویرایش وویس ابجکشن\n\nابجکشن موردنظر را انتخاب کن:",
+    }
+
+    await target.answer(
+        titles.get(action, "ابجکشن را انتخاب کن:"),
+        reply_markup=get_objection_keyboard(objections.data, action),
+    )
+
+
+async def send_objection_detail(target, objection_id: str):
+    result = (
+        supabase.table("objection_answers")
+        .select("*")
+        .eq("id", objection_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
+    if not result.data:
+        await target.answer("❌ ابجکشن پیدا نشد.")
+        return
+
+    item = result.data[0]
+
+    text = "🛡 پاسخ به ابجکشن\n\n"
+    text += f"ابجکشن:\n{item.get('objection') or '-'}\n\n"
+    text += f"پاسخ متنی:\n{item.get('answer') or '-'}"
+
+    await answer_long_text(target, text, reply_markup=get_objection_back_keyboard())
+
+    if item.get("voice_file_id"):
+        await target.answer_voice(
+            voice=item.get("voice_file_id"),
+            caption="🎙 پاسخ صوتی این ابجکشن",
+            reply_markup=get_objection_back_keyboard(),
+        )
+
+
 async def send_users_list(target):
     users = (
         supabase.table("app_users")
@@ -637,6 +726,7 @@ async def send_products_list(target, action: str = "view", page: int = 0):
         "faq": "❓ افزودن سوال محصول\n\nمحصول را انتخاب کن:",
         "story": "📲 افزودن/ویرایش کپشن و استوری محصول\n\nمحصول را انتخاب کن:",
         "feedback": "💬 افزودن/ویرایش فیدبک محصول\n\nمحصول را انتخاب کن:",
+        "pack": "🎁 افزودن/ویرایش محصولات داخل پک\n\nمحصول یا پک را انتخاب کن:",
         "edit": "✏️ ویرایش محصول\n\nمحصول را انتخاب کن:",
     }
 
@@ -678,6 +768,7 @@ async def send_product_detail(target, code: str):
         has_video=bool(video),
         has_catalog=bool(catalog),
         has_faqs=bool(faqs),
+        has_pack_items=bool((product.get("pack_items") or "").strip()),
     )
 
     if photo:
@@ -831,6 +922,32 @@ async def send_product_feedback(target, code: str):
     text += f"کد محصول: {product.get('code') or '-'}\n\n"
     text += feedback_text
     text += PRODUCT_FEEDBACK_WARNING
+
+    await answer_long_text(target, text, reply_markup=get_product_back_keyboard(code))
+
+
+async def send_product_pack_items(target, code: str):
+    product = await get_product_by_code(code)
+
+    if not product:
+        await target.answer("❌ محصولی با این کد پیدا نشد.")
+        return
+
+    pack_items = (product.get("pack_items") or "").strip()
+
+    if not pack_items:
+        await target.answer(
+            "🎁 محصولات داخل پک\n\n"
+            f"📦 {product.get('fa_name') or '-'}\n\n"
+            "برای این محصول یا پک هنوز لیست محصولات داخل پک ثبت نشده است.",
+            reply_markup=get_product_back_keyboard(code),
+        )
+        return
+
+    text = "🎁 محصولات داخل پک\n\n"
+    text += f"📦 {product.get('fa_name') or '-'}\n"
+    text += f"کد محصول/پک: {product.get('code') or '-'}\n\n"
+    text += pack_items
 
     await answer_long_text(target, text, reply_markup=get_product_back_keyboard(code))
 
@@ -1482,6 +1599,7 @@ async def send_global_search_result(target, keyword: str):
                 product.get("intro_text"),
                 product.get("story_caption"),
                 product.get("product_feedback"),
+                product.get("pack_items"),
             ], keyword):
                 product_matches.append(product)
 
@@ -2019,6 +2137,14 @@ async def edit_product_feedback_handler(message: Message):
     await send_products_list(message, "feedback")
 
 
+
+@dp.message(F.text == "🎁 افزودن/ویرایش محصولات داخل پک")
+async def edit_product_pack_items_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش محصولات داخل پک ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_products_list(message, "pack")
 @dp.message(F.text == "✏️ ویرایش محصول")
 async def edit_product_handler(message: Message):
     if not can_manage_content(message.from_user.id):
@@ -2099,6 +2225,10 @@ async def product_section_callback(callback: CallbackQuery):
         await send_product_catalog(callback.message, code)
         return
 
+
+    if section == "pack":
+        await send_product_pack_items(callback.message, code)
+        return
     if section == "story":
         await send_product_story_caption(callback.message, code)
         return
@@ -2229,6 +2359,31 @@ async def product_action_callback(callback: CallbackQuery):
         )
         return
 
+
+    if action == "pack":
+        set_state(callback.from_user.id, "product_pack_items", {
+            "product_id": item.get("id"),
+            "product_code": item.get("code"),
+            "product_name": item.get("fa_name"),
+        })
+
+        current_pack_items = (item.get("pack_items") or "").strip()
+        current_text = current_pack_items if current_pack_items else "برای این محصول یا پک هنوز لیست محصولات داخل پک ثبت نشده است."
+
+        await callback.message.answer(
+            f"✅ محصول/پک انتخاب شد: {item.get('fa_name')}\n\n"
+            "متن فعلی محصولات داخل پک:\n"
+            f"{current_text}\n\n"
+            "حالا متن جدید محصولات داخل پک را بفرست.\n\n"
+            "پیشنهاد قالب:\n\n"
+            "این پک شامل:\n"
+            "1. نام محصول اول - کد محصول\n"
+            "2. نام محصول دوم - کد محصول\n"
+            "3. نام محصول سوم - کد محصول\n\n"
+            "روش پیشنهادی مصرف:\n\n"
+            "برای پاک کردن این بخش، فقط کلمه حذف را بفرست."
+        )
+        return
     if action == "edit":
         set_state(callback.from_user.id, "product_edit", {
             "product_id": item.get("id"),
@@ -2277,12 +2432,21 @@ async def add_objection_handler(message: Message):
     )
 
 
+
+@dp.message(F.text == "🎙 افزودن/ویرایش وویس ابجکشن")
+async def edit_objection_voice_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی ویرایش وویس ابجکشن ندارید.")
+        return
+
+    clear_waiting_states(message.from_user.id)
+    await send_objections_list(message, "voice")
 @dp.message(F.text == "🛡 پاسخ به ابجکشن‌ها")
 async def objections_list_handler(message: Message):
     if not can_view_content(message.from_user.id):
         await message.answer("⛔ حساب شما هنوز فعال نیست.")
         return
-    await message.answer(build_objections_text())
+    await send_objections_list(message, "view")
 
 
 @dp.callback_query(F.data == "show_objections")
@@ -2291,9 +2455,75 @@ async def show_objections_callback(callback: CallbackQuery):
         await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
         return
     await callback.answer()
-    await callback.message.answer(build_objections_text())
+    await send_objections_list(callback.message, "view")
 
 
+
+@dp.callback_query(F.data == "objections_list")
+async def objections_list_callback(callback: CallbackQuery):
+    if not can_view_content(callback.from_user.id):
+        await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+        return
+    await callback.answer()
+    await send_objections_list(callback.message, "view")
+
+
+@dp.callback_query(F.data.startswith("objection_action:"))
+async def objection_action_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("اطلاعات ابجکشن درست نیست.", show_alert=True)
+        return
+
+    action = parts[1]
+    objection_id = parts[2]
+
+    if action == "view":
+        if not can_view_content(callback.from_user.id):
+            await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+            return
+        await callback.answer()
+        await send_objection_detail(callback.message, objection_id)
+        return
+
+    if action == "voice":
+        if not can_manage_content(callback.from_user.id):
+            await callback.answer("⛔ شما دسترسی ویرایش وویس ابجکشن ندارید.", show_alert=True)
+            return
+
+        result = (
+            supabase.table("objection_answers")
+            .select("*")
+            .eq("id", objection_id)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+
+        if not result.data:
+            await callback.answer("❌ ابجکشن پیدا نشد.", show_alert=True)
+            return
+
+        item = result.data[0]
+        clear_waiting_states(callback.from_user.id)
+        set_state(callback.from_user.id, "objection_voice", {
+            "objection_id": item.get("id"),
+            "objection": item.get("objection"),
+        })
+
+        current_text = "وویس فعلی دارد ✅" if item.get("voice_file_id") else "برای این ابجکشن هنوز وویس ثبت نشده است."
+
+        await callback.answer()
+        await callback.message.answer(
+            "✅ ابجکشن انتخاب شد.\n\n"
+            f"ابجکشن:\n{item.get('objection') or '-'}\n\n"
+            f"{current_text}\n\n"
+            "حالا وویس جدید را ارسال کن.\n"
+            "برای حذف وویس، کلمه حذف را بفرست."
+        )
+        return
+
+    await callback.answer("عملیات درست نیست.", show_alert=True)
 @dp.message(F.text == "🎓 آموزش‌ها")
 async def training_levels_handler(message: Message):
     if not can_view_content(message.from_user.id):
@@ -2966,6 +3196,31 @@ async def document_file_handler(message: Message):
         return
 
 
+
+@dp.message(F.voice)
+async def voice_file_handler(message: Message):
+    state = get_state(message.from_user.id)
+
+    if not state:
+        return
+
+    if state.get("type") == "objection_voice":
+        voice_file_id = message.voice.file_id
+
+        try:
+            supabase.table("objection_answers").update({
+                "voice_file_id": voice_file_id,
+            }).eq("id", state["objection_id"]).execute()
+
+            clear_waiting_states(message.from_user.id)
+            await message.answer("✅ وویس ابجکشن با موفقیت ثبت شد.")
+        except Exception:
+            await message.answer(
+                "❌ خطا در ثبت وویس ابجکشن.\n\n"
+                "اگر این خطا را دیدی، یک‌بار این SQL را در Supabase اجرا کن:\n"
+                "alter table objection_answers add column if not exists voice_file_id text;"
+            )
+        return
 @dp.message()
 async def text_handler(message: Message):
     state = get_state(message.from_user.id)
@@ -3140,6 +3395,61 @@ async def text_handler(message: Message):
         await message.answer("✅ پاسخ ابجکشن با موفقیت ثبت شد.")
         return
 
+
+    if state_type == "objection_voice":
+        text = message.text.strip()
+
+        if text in ["حذف", "پاک", "پاک کردن", "حذف شود"]:
+            try:
+                supabase.table("objection_answers").update({
+                    "voice_file_id": None,
+                }).eq("id", state["objection_id"]).execute()
+
+                clear_waiting_states(message.from_user.id)
+                await message.answer("✅ وویس ابجکشن پاک شد.")
+            except Exception:
+                await message.answer("❌ خطا در پاک کردن وویس ابجکشن.")
+            return
+
+        await message.answer("❌ لطفاً وویس ارسال کن یا برای حذف، کلمه حذف را بفرست.")
+        return
+
+    if state_type == "product_pack_items":
+        pack_text = message.text.strip()
+
+        if not pack_text:
+            await message.answer("❌ متن محصولات داخل پک نمی‌تواند خالی باشد.")
+            return
+
+        try:
+            if pack_text in ["حذف", "پاک", "پاک کردن", "حذف شود"]:
+                supabase.table("products").update({
+                    "pack_items": None,
+                    "product_type": "single",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", state["product_id"]).execute()
+
+                clear_waiting_states(message.from_user.id)
+                await message.answer(f"✅ محصولات داخل پک برای {state['product_name']} پاک شد.")
+                return
+
+            supabase.table("products").update({
+                "pack_items": pack_text,
+                "product_type": "pack",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", state["product_id"]).execute()
+
+            clear_waiting_states(message.from_user.id)
+            await message.answer(f"✅ محصولات داخل پک برای {state['product_name']} با موفقیت ثبت شد.")
+
+        except Exception:
+            await message.answer(
+                "❌ خطا در ثبت محصولات داخل پک.\n\n"
+                "اگر این خطا را دیدی، یک‌بار این SQL را در Supabase اجرا کن:\n"
+                "alter table products add column if not exists product_type text default 'single';\n"
+                "alter table products add column if not exists pack_items text;"
+            )
+        return
     if state_type == "product_story_caption":
         story_text = message.text.strip()
 
