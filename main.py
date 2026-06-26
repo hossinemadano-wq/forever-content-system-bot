@@ -301,6 +301,7 @@ def get_trainings_menu():
         [KeyboardButton(text="✏️ ویرایش توضیح سطح")],
         [KeyboardButton(text="📄 افزودن PDF آموزش")],
         [KeyboardButton(text="🎥 افزودن ویدئو آموزش")],
+        [KeyboardButton(text="🎙 افزودن وویس آموزش")],
         [KeyboardButton(text="🖼 افزودن عکس آموزش")],
         [KeyboardButton(text="🗑 حذف/غیرفعال کردن فایل آموزش")],
         [KeyboardButton(text="🎓 آموزش‌ها")],
@@ -618,6 +619,8 @@ def get_training_media_label(media_type: str):
         return "PDF آموزش"
     if media_type == "video":
         return "ویدئو آموزش"
+    if media_type == "voice":
+        return "وویس آموزش"
     if media_type == "photo":
         return "عکس آموزش"
     return "فایل آموزش"
@@ -628,6 +631,8 @@ def get_training_media_column(media_type: str):
         return "pdf_url"
     if media_type == "video":
         return "video_url"
+    if media_type == "voice":
+        return "voice_url"
     if media_type == "photo":
         return "image_url"
     return ""
@@ -637,6 +642,7 @@ def get_training_media_type_keyboard(action: str):
     buttons = [
         [InlineKeyboardButton(text="📄 PDF آموزش", callback_data=f"{action}:pdf")],
         [InlineKeyboardButton(text="🎥 ویدئو آموزش", callback_data=f"{action}:video")],
+        [InlineKeyboardButton(text="🎙 وویس آموزش", callback_data=f"{action}:voice")],
         [InlineKeyboardButton(text="🖼 عکس آموزش", callback_data=f"{action}:photo")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1210,6 +1216,9 @@ async def send_training_step_detail(target, level_number: int, step_number: int)
 
     if item.get("video_url"):
         await target.answer_video(video=item.get("video_url"), caption=f"🎥 ویدئو آموزش: {item.get('title')}")
+
+    if item.get("voice_url"):
+        await target.answer_voice(voice=item.get("voice_url"), caption=f"🎙 وویس آموزش: {item.get('title')}")
 
     if item.get("pdf_url"):
         await target.answer_document(document=item.get("pdf_url"), caption=f"📄 PDF آموزش: {item.get('title')}")
@@ -1975,6 +1984,7 @@ EDITOR_GUIDE_PARTS = [
 ✏️ توضیح سطح را ویرایش کنید
 📄 PDF آموزش اضافه کنید
 🎥 ویدئو آموزش اضافه کنید
+🎙 وویس آموزش اضافه کنید
 🖼 عکس آموزش اضافه کنید
 🗑 فایل آموزش را حذف/غیرفعال کنید
 
@@ -2926,6 +2936,15 @@ async def add_training_video_handler(message: Message):
     await send_training_level_selection(message, "add_media_video", "🎥 افزودن ویدئو آموزش")
 
 
+@dp.message(F.text == "🎙 افزودن وویس آموزش")
+async def add_training_voice_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی افزودن وویس آموزش ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_training_level_selection(message, "add_media_voice", "🎙 افزودن وویس آموزش")
+
+
 @dp.message(F.text == "🖼 افزودن عکس آموزش")
 async def add_training_photo_handler(message: Message):
     if not can_manage_content(message.from_user.id):
@@ -2955,6 +2974,16 @@ async def add_media_video_level_callback(callback: CallbackQuery):
     await send_training_step_selection(callback.message, "add_media_video", int(level_text), "🎥 افزودن ویدئو آموزش", "add_media_video_levels")
 
 
+@dp.callback_query(F.data.startswith("add_media_voice_level:"))
+async def add_media_voice_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "add_media_voice", int(level_text), "🎙 افزودن وویس آموزش", "add_media_voice_levels")
+
+
 @dp.callback_query(F.data.startswith("add_media_photo_level:"))
 async def add_media_photo_level_callback(callback: CallbackQuery):
     if not can_manage_content(callback.from_user.id):
@@ -2975,6 +3004,12 @@ async def add_media_pdf_levels_back(callback: CallbackQuery):
 async def add_media_video_levels_back(callback: CallbackQuery):
     await callback.answer()
     await send_training_level_selection(callback.message, "add_media_video", "🎥 افزودن ویدئو آموزش")
+
+
+@dp.callback_query(F.data == "add_media_voice_levels")
+async def add_media_voice_levels_back(callback: CallbackQuery):
+    await callback.answer()
+    await send_training_level_selection(callback.message, "add_media_voice", "🎙 افزودن وویس آموزش")
 
 
 @dp.callback_query(F.data == "add_media_photo_levels")
@@ -3001,6 +3036,16 @@ async def add_media_video_step_callback(callback: CallbackQuery):
     parts = callback.data.split(":")
     await callback.answer()
     await prepare_training_media_file(callback.message, callback.from_user.id, "video", int(parts[1]), int(parts[2]))
+
+
+@dp.callback_query(F.data.startswith("add_media_voice_step:"))
+async def add_media_voice_step_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    await callback.answer()
+    await prepare_training_media_file(callback.message, callback.from_user.id, "voice", int(parts[1]), int(parts[2]))
 
 
 @dp.callback_query(F.data.startswith("add_media_photo_step:"))
@@ -3056,6 +3101,16 @@ async def delete_media_video_level_callback(callback: CallbackQuery):
     await send_training_step_selection(callback.message, "delete_media_video", int(level_text), "🗑 حذف ویدئو آموزش", "delete_media_video_levels")
 
 
+@dp.callback_query(F.data.startswith("delete_media_voice_level:"))
+async def delete_media_voice_level_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    level_text = callback.data.split(":")[1]
+    await callback.answer()
+    await send_training_step_selection(callback.message, "delete_media_voice", int(level_text), "🗑 حذف وویس آموزش", "delete_media_voice_levels")
+
+
 @dp.callback_query(F.data.startswith("delete_media_photo_level:"))
 async def delete_media_photo_level_callback(callback: CallbackQuery):
     if not can_manage_content(callback.from_user.id):
@@ -3082,6 +3137,15 @@ async def delete_media_video_levels_back(callback: CallbackQuery):
         return
     await callback.answer()
     await send_training_level_selection(callback.message, "delete_media_video", "🗑 حذف ویدئو آموزش")
+
+
+@dp.callback_query(F.data == "delete_media_voice_levels")
+async def delete_media_voice_levels_back(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await send_training_level_selection(callback.message, "delete_media_voice", "🗑 حذف وویس آموزش")
 
 
 @dp.callback_query(F.data == "delete_media_photo_levels")
@@ -3111,6 +3175,16 @@ async def delete_media_video_step_callback(callback: CallbackQuery):
         return
     await callback.answer()
     await delete_training_media(callback.message, "video", int(parts[1]), int(parts[2]))
+
+
+@dp.callback_query(F.data.startswith("delete_media_voice_step:"))
+async def delete_media_voice_step_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ دسترسی ندارید.", show_alert=True)
+        return
+    await callback.answer()
+    await delete_training_media(callback.message, "voice", int(parts[1]), int(parts[2]))
 
 
 @dp.callback_query(F.data.startswith("delete_media_photo_step:"))
@@ -3423,6 +3497,28 @@ async def voice_file_handler(message: Message):
     state = get_state(message.from_user.id)
 
     if not state:
+        return
+
+    if state.get("type") == "training_media_file":
+        if state.get("media_type") != "voice":
+            await message.answer("❌ لطفاً وویس آموزش را ارسال کن.")
+            return
+
+        voice_file_id = message.voice.file_id
+        try:
+            supabase.table("training_steps").update({state["column_name"]: voice_file_id}).eq("id", state["step_id"]).execute()
+            clear_waiting_states(message.from_user.id)
+
+            await message.answer(
+                "✅ وویس آموزش با موفقیت ثبت شد.\n\n"
+                f"سطح {state['level_number']} - مرحله {state['step_number']}\n"
+                f"{state['title']}"
+            )
+        except Exception:
+            await message.answer(
+                "❌ خطا در ثبت وویس آموزش.\n\n"
+                "اگر این خطا را دیدی، SQL ستون voice_url را در Supabase اجرا کن."
+            )
         return
 
     if state.get("type") == "objection_voice":
