@@ -30,6 +30,7 @@ PRODUCT_CATEGORIES = [
     ("nutrition", "مکمل تغذیه ای"),
     ("skin", "محصولات پوستی"),
     ("personal", "محصولات شخصی"),
+    ("bee", "محصولات زنبور عسل"),
     ("packs", "پک ها"),
     ("therapy_packs", "پک های کمک درمانی"),
 ]
@@ -170,8 +171,8 @@ def get_products_menu():
         [KeyboardButton(text="❓ افزودن سوال محصول")],
         [KeyboardButton(text="📲 افزودن/ویرایش کپشن و استوری محصول")],
         [KeyboardButton(text="💬 افزودن/ویرایش فیدبک محصول")],
-        [KeyboardButton(text="🎁 افزودن/ویرایش محصولات داخل پک")],
         [KeyboardButton(text="✏️ ویرایش محصول")],
+        [KeyboardButton(text="🗑 حذف محصول")],
         [KeyboardButton(text="📦 محصولات")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
     ]
@@ -246,6 +247,7 @@ def product_matches_category(product, category_key: str):
         "nutrition": ["مکمل تغذیه ای", "مکمل تغذیه", "مکمل", "مکملها", "مکمل ها", "تغذیه ای"],
         "skin": ["محصولات پوستی", "پوستی", "مراقبت پوست", "مراقبت از پوست", "اسکین", "skin"],
         "personal": ["محصولات شخصی", "شخصی", "بهداشت شخصی", "مراقبت شخصی", "personal"],
+        "bee": ["محصولات زنبور عسل", "زنبور عسل", "محصولات زنبور", "عسل", "bee", "beehive", "honey"],
         "packs": ["پک ها", "پک", "پکها", "باندل", "bundle", "pack"],
         "therapy_packs": ["پک های کمک درمانی", "پک کمک درمانی", "کمک درمانی", "پک درمانی"],
     }
@@ -413,7 +415,7 @@ def get_products_keyboard(products, action: str = "view", page: int = 0, total_c
         buttons.append([
             InlineKeyboardButton(
                 text=f"{item.get('code')} - {item.get('fa_name')}",
-                callback_data=f"product_action:{action}:{item.get('code')}",
+                callback_data=f"product_action:{action}:{item.get('id')}",
             )
         ])
 
@@ -505,8 +507,6 @@ def get_product_page_keyboard(
     if has_catalog:
         buttons.append([InlineKeyboardButton(text="📄 کاتالوگ محصول", callback_data=f"product_section:catalog:{code}")])
 
-    if has_pack_items:
-        buttons.append([InlineKeyboardButton(text="🎁 محصولات داخل پک", callback_data=f"product_section:pack:{code}")])
 
     buttons.append([InlineKeyboardButton(text="📲 کپشن و استوری محصول", callback_data=f"product_section:story:{code}")])
     buttons.append([InlineKeyboardButton(text="💬 فیدبک محصول", callback_data=f"product_section:feedback:{code}")])
@@ -860,8 +860,8 @@ async def send_products_list(target, action: str = "view", page: int = 0, catego
         "faq": "❓ افزودن سوال محصول\n\nمحصول را انتخاب کن:",
         "story": "📲 افزودن/ویرایش کپشن و استوری محصول\n\nمحصول را انتخاب کن:",
         "feedback": "💬 افزودن/ویرایش فیدبک محصول\n\nمحصول را انتخاب کن:",
-        "pack": "🎁 افزودن/ویرایش محصولات داخل پک\n\nمحصول یا پک را انتخاب کن:",
         "edit": "✏️ ویرایش محصول\n\nمحصول را انتخاب کن:",
+        "delete": "🗑 حذف محصول\n\nمحصولی که می‌خواهی حذف شود را انتخاب کن:",
     }
 
     title = titles.get(action, "محصول را انتخاب کن:")
@@ -880,16 +880,37 @@ async def send_products_list(target, action: str = "view", page: int = 0, catego
         reply_markup=get_products_keyboard(page_products, action, page, total_count, category_key),
     )
 
-async def get_product_by_code(code: str):
+async def get_product_by_ref(product_ref: str):
+    """
+    product_ref can be either the Supabase product id or the public product code.
+    Using id in inline buttons keeps Telegram callback_data short, even if a pack uses a long Persian name instead of a numeric code.
+    """
     result = (
         supabase.table("products")
         .select("*")
-        .eq("code", code)
+        .eq("id", product_ref)
         .eq("is_active", True)
         .limit(1)
         .execute()
     )
+
+    if result.data:
+        return result.data[0]
+
+    result = (
+        supabase.table("products")
+        .select("*")
+        .eq("code", product_ref)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+
     return result.data[0] if result.data else None
+
+
+async def get_product_by_code(code: str):
+    return await get_product_by_ref(code)
 
 
 async def send_product_detail(target, code: str):
@@ -906,11 +927,10 @@ async def send_product_detail(target, code: str):
 
     text = get_product_overview_text(product)
     keyboard = get_product_page_keyboard(
-        code,
+        product.get("id"),
         has_video=bool(video),
         has_catalog=bool(catalog),
         has_faqs=bool(faqs),
-        has_pack_items=bool((product.get("pack_items") or "").strip()),
     )
 
     if photo:
@@ -1889,7 +1909,7 @@ async def send_global_search_result(target, keyword: str):
         buttons.append([
             InlineKeyboardButton(
                 text=f"📦 {product.get('code')} - {product.get('fa_name')}",
-                callback_data=f"product_action:view:{product.get('code')}",
+                callback_data=f"product_action:view:{product.get('id')}",
             )
         ])
 
@@ -2265,14 +2285,6 @@ async def edit_product_feedback_handler(message: Message):
     await send_products_list(message, "feedback")
 
 
-
-@dp.message(F.text == "🎁 افزودن/ویرایش محصولات داخل پک")
-async def edit_product_pack_items_handler(message: Message):
-    if not can_manage_content(message.from_user.id):
-        await message.answer("⛔ شما دسترسی ویرایش محصولات داخل پک ندارید.")
-        return
-    clear_waiting_states(message.from_user.id)
-    await send_products_list(message, "pack")
 @dp.message(F.text == "✏️ ویرایش محصول")
 async def edit_product_handler(message: Message):
     if not can_manage_content(message.from_user.id):
@@ -2280,6 +2292,15 @@ async def edit_product_handler(message: Message):
         return
     clear_waiting_states(message.from_user.id)
     await send_products_list(message, "edit")
+
+
+@dp.message(F.text == "🗑 حذف محصول")
+async def delete_product_handler(message: Message):
+    if not can_manage_content(message.from_user.id):
+        await message.answer("⛔ شما دسترسی حذف محصول ندارید.")
+        return
+    clear_waiting_states(message.from_user.id)
+    await send_products_list(message, "delete")
 
 
 @dp.message(F.text == "📦 محصولات")
@@ -2408,10 +2429,6 @@ async def product_section_callback(callback: CallbackQuery):
         await send_product_catalog(callback.message, code)
         return
 
-
-    if section == "pack":
-        await send_product_pack_items(callback.message, code)
-        return
     if section == "story":
         await send_product_story_caption(callback.message, code)
         return
@@ -2431,34 +2448,25 @@ async def product_action_callback(callback: CallbackQuery):
         return
 
     action = parts[1]
-    code = parts[2]
+    product_ref = parts[2]
 
     if action == "view":
         if not can_view_content(callback.from_user.id):
             await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
             return
         await callback.answer()
-        await send_product_detail(callback.message, code)
+        await send_product_detail(callback.message, product_ref)
         return
 
     if not can_manage_content(callback.from_user.id):
         await callback.answer("⛔ شما دسترسی مدیریت محصولات ندارید.", show_alert=True)
         return
 
-    product = (
-        supabase.table("products")
-        .select("*")
-        .eq("code", code)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
-    )
+    item = await get_product_by_ref(product_ref)
 
-    if not product.data:
+    if not item:
         await callback.answer("❌ محصول پیدا نشد.", show_alert=True)
         return
-
-    item = product.data[0]
     clear_waiting_states(callback.from_user.id)
     await callback.answer()
 
@@ -2543,30 +2551,21 @@ async def product_action_callback(callback: CallbackQuery):
         return
 
 
-    if action == "pack":
-        set_state(callback.from_user.id, "product_pack_items", {
-            "product_id": item.get("id"),
-            "product_code": item.get("code"),
-            "product_name": item.get("fa_name"),
-        })
-
-        current_pack_items = (item.get("pack_items") or "").strip()
-        current_text = current_pack_items if current_pack_items else "برای این محصول یا پک هنوز لیست محصولات داخل پک ثبت نشده است."
-
+    if action == "delete":
+        buttons = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ بله، حذف شود", callback_data=f"delete_product_confirm:{item.get('id')}")],
+            [InlineKeyboardButton(text="❌ لغو", callback_data=f"delete_product_cancel:{item.get('id')}")],
+        ])
         await callback.message.answer(
-            f"✅ محصول/پک انتخاب شد: {item.get('fa_name')}\n\n"
-            "متن فعلی محصولات داخل پک:\n"
-            f"{current_text}\n\n"
-            "حالا متن جدید محصولات داخل پک را بفرست.\n\n"
-            "پیشنهاد قالب:\n\n"
-            "این پک شامل:\n"
-            "1. نام محصول اول - کد محصول\n"
-            "2. نام محصول دوم - کد محصول\n"
-            "3. نام محصول سوم - کد محصول\n\n"
-            "روش پیشنهادی مصرف:\n\n"
-            "برای پاک کردن این بخش، فقط کلمه حذف را بفرست."
+            "🗑 حذف محصول\n\n"
+            f"محصول انتخاب‌شده: {item.get('code')} - {item.get('fa_name')}\n\n"
+            "آیا مطمئنی می‌خواهی این محصول حذف شود؟\n"
+            "بعد از حذف، محصول برای مشتری‌ها نمایش داده نمی‌شود.",
+            reply_markup=buttons,
         )
         return
+
+
     if action == "edit":
         set_state(callback.from_user.id, "product_edit", {
             "product_id": item.get("id"),
@@ -2579,6 +2578,45 @@ async def product_action_callback(callback: CallbackQuery):
         )
         return
 
+
+
+
+@dp.callback_query(F.data.startswith("delete_product_confirm:"))
+async def delete_product_confirm_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی حذف محصول ندارید.", show_alert=True)
+        return
+
+    product_id = callback.data.split(":", 1)[1]
+    product = await get_product_by_ref(product_id)
+
+    if not product:
+        await callback.answer("❌ محصول پیدا نشد.", show_alert=True)
+        return
+
+    try:
+        supabase.table("products").update({
+            "is_active": False,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", product_id).execute()
+
+        await callback.answer("✅ محصول حذف شد.", show_alert=True)
+        await callback.message.answer(
+            "✅ محصول از لیست ربات حذف شد.\n\n"
+            f"{product.get('code')} - {product.get('fa_name')}"
+        )
+    except Exception:
+        await callback.answer("❌ خطا در حذف محصول.", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("delete_product_cancel:"))
+async def delete_product_cancel_callback(callback: CallbackQuery):
+    if not can_manage_content(callback.from_user.id):
+        await callback.answer("⛔ شما دسترسی حذف محصول ندارید.", show_alert=True)
+        return
+
+    await callback.answer("لغو شد.", show_alert=True)
+    await callback.message.answer("❌ حذف محصول لغو شد.")
 
 @dp.callback_query(F.data.startswith("product:"))
 async def old_product_detail_callback(callback: CallbackQuery):
@@ -3597,42 +3635,6 @@ async def text_handler(message: Message):
         await message.answer("❌ لطفاً وویس ارسال کن یا برای حذف، کلمه حذف را بفرست.")
         return
 
-    if state_type == "product_pack_items":
-        pack_text = message.text.strip()
-
-        if not pack_text:
-            await message.answer("❌ متن محصولات داخل پک نمی‌تواند خالی باشد.")
-            return
-
-        try:
-            if pack_text in ["حذف", "پاک", "پاک کردن", "حذف شود"]:
-                supabase.table("products").update({
-                    "pack_items": None,
-                    "product_type": "single",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", state["product_id"]).execute()
-
-                clear_waiting_states(message.from_user.id)
-                await message.answer(f"✅ محصولات داخل پک برای {state['product_name']} پاک شد.")
-                return
-
-            supabase.table("products").update({
-                "pack_items": pack_text,
-                "product_type": "pack",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", state["product_id"]).execute()
-
-            clear_waiting_states(message.from_user.id)
-            await message.answer(f"✅ محصولات داخل پک برای {state['product_name']} با موفقیت ثبت شد.")
-
-        except Exception:
-            await message.answer(
-                "❌ خطا در ثبت محصولات داخل پک.\n\n"
-                "اگر این خطا را دیدی، یک‌بار این SQL را در Supabase اجرا کن:\n"
-                "alter table products add column if not exists product_type text default 'single';\n"
-                "alter table products add column if not exists pack_items text;"
-            )
-        return
     if state_type == "product_story_caption":
         story_text = message.text.strip()
 
