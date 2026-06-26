@@ -25,6 +25,18 @@ dp = Dispatcher()
 VALID_ROLES = ["approved_customer", "content_contributor", "admin"]
 PRODUCT_LIST_PAGE_SIZE = 20
 
+PRODUCT_CATEGORIES = [
+    ("drinks", "نوشیدنی ها"),
+    ("nutrition", "مکمل تغذیه ای"),
+    ("skin", "محصولات پوستی"),
+    ("personal", "محصولات شخصی"),
+    ("packs", "پک ها"),
+    ("therapy_packs", "پک های کمک درمانی"),
+]
+
+PRODUCT_CATEGORY_LABELS = {**dict(PRODUCT_CATEGORIES), "all": "همه محصولات"}
+
+
 # همه حالت‌های انتظار اینجا نگهداری می‌شود
 USER_STATE = {}
 
@@ -166,6 +178,100 @@ def get_products_menu():
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
+def get_product_category_label(category_key: str):
+    return PRODUCT_CATEGORY_LABELS.get(category_key, "")
+
+
+def get_product_category_keyboard(callback_prefix: str, action: str = "view"):
+    buttons = []
+
+    for key, label in PRODUCT_CATEGORIES:
+        buttons.append([
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"{callback_prefix}:{action}:{key}",
+            )
+        ])
+
+    if action == "view":
+        buttons.append([
+            InlineKeyboardButton(
+                text="📋 همه محصولات",
+                callback_data=f"{callback_prefix}:{action}:all",
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_category_products_menu_text(action: str = "view"):
+    if action == "view":
+        return (
+            "📦 محصولات\n\n"
+            "لطفاً دسته‌بندی محصول را انتخاب کن:"
+        )
+
+    return (
+        "📦 انتخاب دسته‌بندی محصول\n\n"
+        "اول مشخص کن محصول در کدام دسته قرار می‌گیرد:"
+    )
+
+
+def normalize_product_category(value):
+    text = str(value or "").strip().lower()
+    replacements = {
+        "ي": "ی",
+        "ك": "ک",
+        "أ": "ا",
+        "إ": "ا",
+        "آ": "ا",
+        "ة": "ه",
+        "‌": " ",
+        "‌": " ",
+        "-": " ",
+        "_": " ",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return " ".join(text.split())
+
+
+def product_matches_category(product, category_key: str):
+    category = normalize_product_category(product.get("category"))
+    product_type = normalize_product_category(product.get("product_type"))
+    pack_items = str(product.get("pack_items") or "").strip()
+
+    aliases = {
+        "drinks": ["نوشیدنی ها", "نوشیدنی", "نوشیدنیها", "ژل نوشیدنی", "نوشیدنی های فوراور"],
+        "nutrition": ["مکمل تغذیه ای", "مکمل تغذیه", "مکمل", "مکملها", "مکمل ها", "تغذیه ای"],
+        "skin": ["محصولات پوستی", "پوستی", "مراقبت پوست", "مراقبت از پوست", "اسکین", "skin"],
+        "personal": ["محصولات شخصی", "شخصی", "بهداشت شخصی", "مراقبت شخصی", "personal"],
+        "packs": ["پک ها", "پک", "پکها", "باندل", "bundle", "pack"],
+        "therapy_packs": ["پک های کمک درمانی", "پک کمک درمانی", "کمک درمانی", "پک درمانی"],
+    }
+
+    normalized_aliases = [normalize_product_category(item) for item in aliases.get(category_key, [])]
+
+    if category_key == "therapy_packs":
+        return category in normalized_aliases or ("کمک درمانی" in category) or ("درمانی" in category and (product_type == "pack" or bool(pack_items)))
+
+    if category_key == "packs":
+        if category in normalized_aliases:
+            return True
+        if product_type == "pack" or bool(pack_items):
+            return "کمک درمانی" not in category and "درمانی" not in category
+        return False
+
+    return category in normalized_aliases
+
+
+def filter_products_by_category(products, category_key: str | None):
+    if not category_key or category_key == "all":
+        return products
+
+    return [item for item in products if product_matches_category(item, category_key)]
+
+
 def get_objections_menu():
     buttons = [
         [KeyboardButton(text="➕ افزودن پاسخ ابجکشن")],
@@ -300,7 +406,7 @@ def product_template(product):
     )
 
 
-def get_products_keyboard(products, action: str = "view", page: int = 0, total_count: int = 0):
+def get_products_keyboard(products, action: str = "view", page: int = 0, total_count: int = 0, category_key: str | None = None):
     buttons = []
 
     for item in products:
@@ -312,12 +418,13 @@ def get_products_keyboard(products, action: str = "view", page: int = 0, total_c
         ])
 
     navigation_buttons = []
+    category_part = category_key or "all"
 
     if page > 0:
         navigation_buttons.append(
             InlineKeyboardButton(
                 text="⬅️ صفحه قبل",
-                callback_data=f"product_page:{action}:{page - 1}",
+                callback_data=f"product_page:{action}:{page - 1}:{category_part}",
             )
         )
 
@@ -325,12 +432,15 @@ def get_products_keyboard(products, action: str = "view", page: int = 0, total_c
         navigation_buttons.append(
             InlineKeyboardButton(
                 text="صفحه بعد ➡️",
-                callback_data=f"product_page:{action}:{page + 1}",
+                callback_data=f"product_page:{action}:{page + 1}:{category_part}",
             )
         )
 
     if navigation_buttons:
         buttons.append(navigation_buttons)
+
+    if action == "view":
+        buttons.append([InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی محصولات", callback_data="products_list")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -698,7 +808,18 @@ async def send_admin_user_detail(target, telegram_id: int):
     await target.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
-async def send_products_list(target, action: str = "view", page: int = 0):
+async def send_product_categories(target, action: str = "view"):
+    await target.answer(
+        get_category_products_menu_text(action),
+        reply_markup=get_product_category_keyboard("product_category", action),
+    )
+
+
+async def send_products_list(target, action: str = "view", page: int = 0, category_key: str | None = None):
+    if action == "view" and not category_key:
+        await send_product_categories(target, action)
+        return
+
     products = (
         supabase.table("products")
         .select("*")
@@ -707,19 +828,32 @@ async def send_products_list(target, action: str = "view", page: int = 0):
         .execute()
     )
 
-    if not products.data:
+    filtered_products = filter_products_by_category(products.data or [], category_key)
+
+    if not filtered_products:
+        category_label = get_product_category_label(category_key or "")
+        if action == "view" and category_label:
+            await target.answer(
+                f"📦 {category_label}\n\n"
+                "برای این دسته هنوز محصولی ثبت نشده است.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی محصولات", callback_data="products_list")]
+                ]),
+            )
+            return
+
         await target.answer("هنوز محصولی ثبت نشده است.")
         return
 
-    total_count = len(products.data)
+    total_count = len(filtered_products)
     max_page = max((total_count - 1) // PRODUCT_LIST_PAGE_SIZE, 0)
     page = max(0, min(page, max_page))
     start_index = page * PRODUCT_LIST_PAGE_SIZE
     end_index = start_index + PRODUCT_LIST_PAGE_SIZE
-    page_products = products.data[start_index:end_index]
+    page_products = filtered_products[start_index:end_index]
 
     titles = {
-        "view": "📦 لیست محصولات\n\nبرای باز کردن صفحه محصول، روی محصول موردنظر بزن:",
+        "view": "📦 لیست محصولات",
         "photo": "🖼 افزودن عکس محصول\n\nمحصول را انتخاب کن:",
         "video": "🎥 افزودن ویدئو محصول\n\nمحصول را انتخاب کن:",
         "catalog": "📄 افزودن کاتالوگ محصول\n\nمحصول را انتخاب کن:",
@@ -730,13 +864,21 @@ async def send_products_list(target, action: str = "view", page: int = 0):
         "edit": "✏️ ویرایش محصول\n\nمحصول را انتخاب کن:",
     }
 
+    title = titles.get(action, "محصول را انتخاب کن:")
+
+    if action == "view":
+        category_label = get_product_category_label(category_key or "")
+        if category_label:
+            title = f"📦 {category_label}\n\nبرای باز کردن صفحه محصول، روی محصول موردنظر بزن:"
+        else:
+            title = "📦 لیست محصولات\n\nبرای باز کردن صفحه محصول، روی محصول موردنظر بزن:"
+
     page_text = f"\n\nصفحه {page + 1} از {max_page + 1}"
 
     await target.answer(
-        titles.get(action, "محصول را انتخاب کن:") + page_text,
-        reply_markup=get_products_keyboard(page_products, action, page, total_count),
+        title + page_text,
+        reply_markup=get_products_keyboard(page_products, action, page, total_count, category_key),
     )
-
 
 async def get_product_by_code(code: str):
     result = (
@@ -2066,21 +2208,7 @@ async def add_product_handler(message: Message):
         return
 
     clear_waiting_states(message.from_user.id)
-    set_state(message.from_user.id, "product_add")
-
-    await message.answer(
-        "اطلاعات محصول را با همین قالب پر کن و بفرست:\n\n"
-        "کد محصول: \n"
-        "نام فارسی: \n"
-        "نام انگلیسی: \n"
-        "حجم: \n"
-        "دسته بندی: \n"
-        "ویژگی‌ها: \n"
-        "مزایا: \n"
-        "نحوه استفاده: \n"
-        "نکات مهم: \n"
-        "متن معرفی: "
-    )
+    await send_product_categories(message, "add")
 
 
 @dp.message(F.text == "🖼 افزودن عکس محصول")
@@ -2171,15 +2299,70 @@ async def products_list_callback(callback: CallbackQuery):
     await send_products_list(callback.message, "view", 0)
 
 
+@dp.callback_query(F.data.startswith("product_category:"))
+async def product_category_callback(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer("دسته‌بندی درست نیست.", show_alert=True)
+        return
+
+    action = parts[1]
+    category_key = parts[2]
+    category_label = get_product_category_label(category_key)
+
+    if not category_label:
+        await callback.answer("دسته‌بندی درست نیست.", show_alert=True)
+        return
+
+    if action == "view":
+        if not can_view_content(callback.from_user.id):
+            await callback.answer("⛔ حساب شما هنوز فعال نیست.", show_alert=True)
+            return
+        await callback.answer()
+        await send_products_list(callback.message, "view", 0, category_key)
+        return
+
+    if action == "add":
+        if not can_manage_content(callback.from_user.id):
+            await callback.answer("⛔ شما دسترسی ثبت اطلاعات ندارید.", show_alert=True)
+            return
+
+        clear_waiting_states(callback.from_user.id)
+        set_state(callback.from_user.id, "product_add", {
+            "category_key": category_key,
+            "category_label": category_label,
+        })
+
+        await callback.answer()
+        await callback.message.answer(
+            f"✅ دسته انتخاب شد: {category_label}\n\n"
+            "اطلاعات محصول را با همین قالب پر کن و بفرست:\n\n"
+            "کد محصول: \n"
+            "نام فارسی: \n"
+            "نام انگلیسی: \n"
+            "حجم: \n"
+            f"دسته بندی: {category_label}\n"
+            "ویژگی‌ها: \n"
+            "مزایا: \n"
+            "نحوه استفاده: \n"
+            "نکات مهم: \n"
+            "متن معرفی: "
+        )
+        return
+
+    await callback.answer("عملیات دسته‌بندی درست نیست.", show_alert=True)
+
+
 @dp.callback_query(F.data.startswith("product_page:"))
 async def product_page_callback(callback: CallbackQuery):
     parts = callback.data.split(":")
-    if len(parts) != 3 or not parts[2].isdigit():
+    if len(parts) not in [3, 4] or not parts[2].isdigit():
         await callback.answer("اطلاعات صفحه درست نیست.", show_alert=True)
         return
 
     action = parts[1]
     page = int(parts[2])
+    category_key = parts[3] if len(parts) == 4 else None
 
     if action == "view":
         if not can_view_content(callback.from_user.id):
@@ -2190,7 +2373,7 @@ async def product_page_callback(callback: CallbackQuery):
         return
 
     await callback.answer()
-    await send_products_list(callback.message, action, page)
+    await send_products_list(callback.message, action, page, category_key)
 
 
 @dp.callback_query(F.data.startswith("product_section:"))
@@ -3556,6 +3739,14 @@ async def text_handler(message: Message):
     if state_type == "product_add":
         product_data = parse_product_text(message.text)
 
+        if state.get("category_label"):
+            product_data["category"] = state.get("category_label")
+
+        if state.get("category_key") in ["packs", "therapy_packs"]:
+            product_data["product_type"] = "pack"
+        else:
+            product_data["product_type"] = "single"
+
         if not product_data["code"] or not product_data["fa_name"]:
             await message.answer("❌ کد محصول و نام فارسی الزامی است.")
             return
@@ -3566,7 +3757,8 @@ async def text_handler(message: Message):
             await message.answer(
                 "✅ محصول با موفقیت ثبت شد.\n\n"
                 f"کد محصول: {product_data['code']}\n"
-                f"نام محصول: {product_data['fa_name']}"
+                f"نام محصول: {product_data['fa_name']}\n"
+                f"دسته‌بندی: {product_data.get('category') or '-'}"
             )
         except Exception:
             await message.answer("❌ خطا در ثبت محصول. احتمالاً کد محصول تکراری است.")
